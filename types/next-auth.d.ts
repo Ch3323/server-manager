@@ -9,13 +9,13 @@ declare module "next-auth" {
     user: {
       id: string;
       email: string;
-      role: string;
+      role: "USER" | "MOD" | "ADMIN";
     };
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
-    role?: string;
+    role?: "USER" | "MOD" | "ADMIN";
   }
 }
