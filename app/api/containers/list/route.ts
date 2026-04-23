@@ -9,7 +9,7 @@ export async function GET() {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  if (!["ADMIN", "DEV", "VIEWER"].includes(session.user.role)) {
+  if (!["ADMIN", "MOD", "USER"].includes(session.user.role)) {
     return new Response("Forbidden", { status: 403 });
   }
 

@@ -1,7 +1,6 @@
-export default function Home() {
+function page() {
   return (
-    <div className="">
-      
-    </div>
-  );
+    <div>page</div>
+  )
 }
+export default page
