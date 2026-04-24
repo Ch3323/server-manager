@@ -67,18 +67,18 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-4">
+    <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold">Login</CardTitle>
           <CardDescription>
-            Enter your credentials to access your account
+            Enter your credentials to access your account.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded-md text-sm">
-              {error}
+            <div className="mb-4 p-3 bg-red-400/20 border border-red-400 text-red-400 rounded-md text-sm">
+              {error}.
             </div>
           )}
 
@@ -92,13 +92,14 @@ export default function LoginPage() {
                     <FormLabel>Email</FormLabel>
                     <FormControl>
                       <Input
+                        className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="you@example.com"
                         type="email"
                         disabled={isLoading}
                         {...field}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage className="font-normal" />
                   </FormItem>
                 )}
               />
@@ -111,13 +112,14 @@ export default function LoginPage() {
                     <FormLabel>Password</FormLabel>
                     <FormControl>
                       <Input
+                        className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="••••••••"
                         type="password"
                         disabled={isLoading}
                         {...field}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage className="font-normal" />
                   </FormItem>
                 )}
               />
@@ -133,12 +135,12 @@ export default function LoginPage() {
           </Form>
 
           <div className="mt-4 text-center text-sm">
-            <span className="text-slate-600">Don't have an account? </span>
+            <span className="text-muted-foreground">Don't have an account? </span>
             <Link
               href="/auth/register"
               className="text-primary hover:underline font-medium"
             >
-              Register here
+              Register
             </Link>
           </div>
         </CardContent>

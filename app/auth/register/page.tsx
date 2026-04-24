@@ -24,9 +24,6 @@ const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   confirmPassword: z.string(),
-  terms: z.boolean().refine((val) => val === true, {
-    message: 'You must accept the terms and conditions',
-  }),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ['confirmPassword'],
@@ -46,7 +43,6 @@ export default function RegisterPage() {
       email: '',
       password: '',
       confirmPassword: '',
-      terms: false,
     },
   });
 
@@ -87,14 +83,14 @@ export default function RegisterPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-4">
-        <Card className="w-full max-w-md">
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md bg-transparent ring-0">
           <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl font-bold text-green-600">Success!</CardTitle>
+            <CardTitle className="text-2xl font-bold">Account created</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-center space-y-4">
-              <p className="text-slate-600">
+            <div className="space-y-4">
+              <p className="text-muted-foreground">
                 Your account has been created successfully. Redirecting to login...
               </p>
             </div>
@@ -105,12 +101,12 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-4">
+    <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold">Create Account</CardTitle>
           <CardDescription>
-            Sign up to get started
+            Sign up to get started.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -130,13 +126,14 @@ export default function RegisterPage() {
                     <FormLabel>Email</FormLabel>
                     <FormControl>
                       <Input
+                        className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="you@example.com"
                         type="email"
                         disabled={isLoading}
                         {...field}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage className="font-normal" />
                   </FormItem>
                 )}
               />
@@ -149,13 +146,14 @@ export default function RegisterPage() {
                     <FormLabel>Password</FormLabel>
                     <FormControl>
                       <Input
+                        className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="••••••••"
                         type="password"
                         disabled={isLoading}
                         {...field}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage className="font-normal" />
                   </FormItem>
                 )}
               />
@@ -168,38 +166,14 @@ export default function RegisterPage() {
                     <FormLabel>Confirm Password</FormLabel>
                     <FormControl>
                       <Input
+                        className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="••••••••"
                         type="password"
                         disabled={isLoading}
                         {...field}
                       />
                     </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="terms"
-                render={({ field }) => (
-                  <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                    <FormControl>
-                      <Checkbox
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                        disabled={isLoading}
-                      />
-                    </FormControl>
-                    <div className="space-y-1 leading-none">
-                      <FormLabel className="text-sm font-normal cursor-pointer">
-                        I agree to the{' '}
-                        <Link href="#" className="underline hover:text-primary">
-                          terms and conditions
-                        </Link>
-                      </FormLabel>
-                      <FormMessage />
-                    </div>
+                    <FormMessage className="font-normal" />
                   </FormItem>
                 )}
               />
@@ -215,12 +189,12 @@ export default function RegisterPage() {
           </Form>
 
           <div className="mt-4 text-center text-sm">
-            <span className="text-slate-600">Already have an account? </span>
+            <span className="text-muted-foreground">Already have an account? </span>
             <Link
               href="/auth/login"
               className="text-primary hover:underline font-medium"
             >
-              Login here
+              Login
             </Link>
           </div>
         </CardContent>
