@@ -297,17 +297,6 @@ export default function DashboardPage() {
     return (
         <div className="p-4 md:p-8 space-y-6">
             <div className="container mx-auto">
-                {error && (
-                    <div className="mb-4 p-3 bg-red-400/20 border border-red-400 text-red-400 rounded-md text-sm">
-                        {error}
-                    </div>
-                )}
-                {quickActionMessage && (
-                    <div className="mb-4 p-3 bg-green-400/20 border border-green-400 text-green-500 rounded-md text-sm">
-                        {quickActionMessage}
-                    </div>
-                )}
-
                 <div className="mb-3">
                     <h2 className="text-lg font-semibold">Overview</h2>
                     <p className="text-sm text-muted-foreground">Container summary</p>

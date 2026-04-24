@@ -291,7 +291,7 @@ export default function TerminalPage() {
     <div className="p-0">
       <div className="h-[calc(100vh-4rem)] overflow-hidden border bg-black font-mono text-xs leading-5 md:text-sm">
         <div ref={outputRef} className="h-[calc(100%-44px)] overflow-auto p-3">
-          <div className="space-y-1 whitespace-pre-wrap break-words">
+          <div className="space-y-1 whitespace-pre-wrap wrap-break-word">
             {blocks.map((block) => (
               <p
                 key={block.id}

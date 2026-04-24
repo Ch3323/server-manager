@@ -703,14 +703,6 @@ export default function FilesPage() {
     return (
         <div className="p-4 md:p-8 space-y-6">
             <div className="container mx-auto flex max-w-7xl flex-col gap-4">
-                {error ? (
-                    <div className="rounded-md border border-red-400 bg-red-400/20 p-3 text-sm text-red-500">{error}</div>
-                ) : null}
-
-                {message ? (
-                    <div className="rounded-md border border-green-400 bg-green-400/20 p-3 text-sm text-green-500">{message}</div>
-                ) : null}
-
                 <Card>
                     <CardHeader className="gap-4">
                         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">

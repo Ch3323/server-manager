@@ -303,14 +303,6 @@ export default function ContainersPage() {
           </div>
         </div>
 
-        {error ? (
-          <div className="rounded-md border border-red-400 bg-red-400/20 p-3 text-sm text-red-500">{error}</div>
-        ) : null}
-
-        {message ? (
-          <div className="rounded-md border border-green-400 bg-green-400/20 p-3 text-sm text-green-500">{message}</div>
-        ) : null}
-
         {isModOrAdmin ? (
           <Card>
             <CardHeader>
