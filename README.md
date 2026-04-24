@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Server Manager
 
-## Getting Started
+Next.js 16 app for managing Docker containers, browsing files, viewing system info, and opening a live terminal.
 
-First, run the development server:
+## Requirements
+
+- Node.js 20+
+- PostgreSQL
+- Docker Engine
+
+## Local Setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Copy environment variables:
+
+```bash
+cp .env.example .env
+```
+
+3. Update `.env` with your PostgreSQL and NextAuth values.
+
+4. Generate the Prisma client and apply migrations:
+
+```bash
+npx prisma generate
+npx prisma migrate deploy
+```
+
+5. Start the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Ubuntu Notes
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- The file manager now defaults to the project root instead of the whole filesystem.
+- If you set `FILE_MANAGER_ROOT="/"`, the app can browse the full filesystem.
+- Write-like actions are blocked inside protected paths from `FILE_MANAGER_PROTECTED_PATHS`.
+- Linux defaults for protected paths are `/etc`, `/boot`, `/proc`, `/sys`, and `/dev`.
+- The live terminal now starts in the project root by default.
+- Docker on Ubuntu uses `/var/run/docker.sock` automatically.
+- If the app cannot access Docker, add your user to the `docker` group or run the app with permission to access the Docker socket.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Example Docker permission command:
 
-## Learn More
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Environment Variables
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `DATABASE_URL`: PostgreSQL connection string
+- `NEXTAUTH_URL`: public URL of the app
+- `NEXTAUTH_SECRET`: secret used by NextAuth
+- `FILE_MANAGER_ROOT`: optional directory exposed by the file manager
+- `FILE_MANAGER_PROTECTED_PATHS`: optional comma-separated list of paths that cannot be edited, created in, renamed, or deleted
+- `TERMINAL_ROOT_PATH`: optional starting directory for terminal sessions
+- `TERMINAL_SHELL`: optional shell override
+- `DOCKER_HOST`: optional Docker host such as `tcp://127.0.0.1:2375` or `unix:///var/run/docker.sock`
+- `DOCKER_SOCKET_PATH`: optional Unix socket override
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Production
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run build
+npm run start
+```

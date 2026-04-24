@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useMemo } from "react";
 
 import { AppSidebar } from "@/components/sidebar/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -18,29 +18,22 @@ interface Item {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-    const [items, setItems] = useState<Item[]>([]);
-
     const pathname = usePathname();
     const hideSidebar = AUTH_ROUTES.some(
         (route) => pathname === route || pathname.startsWith(`${route}/`)
     );
 
-    if (hideSidebar) {
-        return <>{children}</>;
-    }
-
-    function generateBreadcrump(path: string) {
-        const pathArray = path.split('/').slice(1);
-        const crumbs: Item[] = pathArray.map((label, i) => ({
+    const items = useMemo<Item[]>(() => {
+        const pathArray = pathname.split('/').slice(1);
+        return pathArray.map((label, i) => ({
             label: label.replace(/[-_]/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase()),
             href: "/" + pathArray.slice(0, i + 1).join("/")
         }));
-        setItems(crumbs);
-    }
-
-    useEffect(() => {
-        generateBreadcrump(pathname);
     }, [pathname]);
+
+    if (hideSidebar) {
+        return <>{children}</>;
+    }
 
     return (
         <TooltipProvider>

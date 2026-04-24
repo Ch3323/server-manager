@@ -1,7 +1,13 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import {
+  getProtectedFileManagerPaths,
+  getWorkspaceRoot,
+  getWorkspaceRootLabel,
+} from "@/lib/runtime-config";
 
-const workspaceRoot = path.parse(process.cwd()).root;
+const workspaceRoot = getWorkspaceRoot();
+const protectedPaths = getProtectedFileManagerPaths();
 
 export type FileListItem = {
   name: string;
@@ -10,6 +16,8 @@ export type FileListItem = {
   size: number;
   modifiedAt: string;
 };
+
+type FileManagerError = Error & { code?: string };
 
 function normalizeRelative(inputPath: string) {
   const normalized = inputPath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -31,6 +39,24 @@ export function resolveWorkspacePath(relativePath = "") {
 export function toRelativeWorkspacePath(absolutePath: string) {
   const relative = path.relative(workspaceRoot, absolutePath);
   return normalizeRelative(relative);
+}
+
+function createProtectedPathError(targetPath: string) {
+  const error = new Error(`Protected path: ${targetPath}`) as FileManagerError;
+  error.code = "EACCES";
+  return error;
+}
+
+function isPathWithin(parentPath: string, targetPath: string) {
+  const relative = path.relative(parentPath, targetPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function assertPathWritable(absolutePath: string) {
+  const protectedPath = protectedPaths.find((entry) => isPathWithin(entry, absolutePath));
+  if (protectedPath) {
+    throw createProtectedPathError(protectedPath);
+  }
 }
 
 export async function listDirectory(relativePath = "") {
@@ -76,6 +102,7 @@ export async function readTextFile(relativePath: string) {
 
 export async function writeTextFile(relativePath: string, content: string) {
   const absolute = resolveWorkspacePath(relativePath);
+  assertPathWritable(absolute);
   await fs.writeFile(absolute, content, "utf8");
 }
 
@@ -85,6 +112,8 @@ export async function writeBinaryFile(
   options?: { overwrite?: boolean }
 ) {
   const absolute = resolveWorkspacePath(relativePath);
+  assertPathWritable(absolute);
+  assertPathWritable(path.dirname(absolute));
   const overwrite = options?.overwrite ?? false;
   await fs.mkdir(path.dirname(absolute), { recursive: true });
   await fs.writeFile(absolute, content, overwrite ? undefined : { flag: "wx" });
@@ -92,22 +121,27 @@ export async function writeBinaryFile(
 
 export async function createFile(relativePath: string) {
   const absolute = resolveWorkspacePath(relativePath);
+  assertPathWritable(absolute);
   await fs.writeFile(absolute, "", { flag: "wx" });
 }
 
 export async function createDirectory(relativePath: string) {
   const absolute = resolveWorkspacePath(relativePath);
+  assertPathWritable(absolute);
   await fs.mkdir(absolute, { recursive: false });
 }
 
 export async function renamePath(fromPath: string, toPath: string) {
   const fromAbsolute = resolveWorkspacePath(fromPath);
   const toAbsolute = resolveWorkspacePath(toPath);
+  assertPathWritable(fromAbsolute);
+  assertPathWritable(toAbsolute);
   await fs.rename(fromAbsolute, toAbsolute);
 }
 
 export async function deletePath(relativePath: string) {
   const absolute = resolveWorkspacePath(relativePath);
+  assertPathWritable(absolute);
   const stats = await fs.stat(absolute);
 
   if (stats.isDirectory()) {
@@ -119,5 +153,5 @@ export async function deletePath(relativePath: string) {
 }
 
 export function getWorkspaceRootName() {
-  return workspaceRoot.replace(/\\/g, "/");
+  return getWorkspaceRootLabel();
 }

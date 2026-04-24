@@ -561,7 +561,7 @@ export default function ContainersPage() {
             <DialogDescription>{logTarget?.name}</DialogDescription>
           </DialogHeader>
           {logsError ? <div className="rounded-md border border-red-400 bg-red-400/20 p-3 text-sm text-red-500">{logsError}</div> : null}
-          <pre className="max-h-[60vh] overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap break-words">
+          <pre className="max-h-[60vh] overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap wrap-break-word">
             {isLogsLoading ? "Loading logs..." : logs || "No logs found"}
           </pre>
           <DialogFooter>

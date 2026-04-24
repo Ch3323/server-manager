@@ -1,11 +1,10 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
 import { hasPermission } from "@/lib/rbac";
 
 export async function POST(request: Request) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
 
   if (!session) {
     return new Response("Unauthorized", { status: 401 });

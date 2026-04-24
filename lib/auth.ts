@@ -46,8 +46,8 @@ export const authOptions: AuthOptions = {
 
   callbacks: {
     async jwt({ token, user }: { token: JWT; user?: User }) {
-      if (user) {
-        (token as any).role = (user as any).role;
+      if (user?.role) {
+        token.role = user.role;
       }
       return token;
     },
@@ -57,7 +57,9 @@ export const authOptions: AuthOptions = {
           where: { id: token.sub },
           select: { role: true }
         });
-        (session.user as any).role = user?.role;
+        if (user?.role) {
+          session.user.role = user.role;
+        }
       }
       return session;
     },

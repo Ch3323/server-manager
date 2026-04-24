@@ -1,6 +1,5 @@
 import path from "node:path";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/getSession";
 import { writeBinaryFile } from "@/lib/file-manager";
 
 function joinPath(base: string, name: string) {
@@ -20,7 +19,7 @@ function sanitizeRelativePath(input: string) {
 }
 
 export async function POST(request: Request) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
 
   if (!session) {
     return new Response("Unauthorized", { status: 401 });
@@ -60,6 +59,9 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "EACCES" || code === "EPERM") {
+      return new Response("Access denied for this path", { status: 403 });
+    }
     if (code === "EEXIST") {
       return new Response("File already exists", { status: 409 });
     }

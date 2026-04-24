@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { getTerminalStartPath } from "@/lib/runtime-config";
 
 const WS_PATH = "/ws/terminal";
 const WS_PORT = Number(process.env.TERMINAL_WS_PORT ?? "3002");
@@ -49,6 +50,14 @@ function getOrCreateState(): WsState {
 }
 
 function getShellConfig() {
+  const configuredShell = process.env.TERMINAL_SHELL?.trim();
+  if (configuredShell) {
+    return {
+      shell: configuredShell,
+      args: [],
+    };
+  }
+
   if (process.platform === "win32") {
     return {
       shell: "powershell.exe",
@@ -266,12 +275,7 @@ async function startServer(state: WsState) {
 }
 
 export function getTerminalRootPath() {
-  if (process.platform === "win32") {
-    const systemDrive = process.env.SystemDrive?.trim();
-    if (systemDrive) return `${systemDrive}\\`;
-    return "C:\\";
-  }
-  return "/";
+  return getTerminalStartPath();
 }
 
 export async function ensureTerminalWsServer() {

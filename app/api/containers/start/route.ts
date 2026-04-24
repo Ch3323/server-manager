@@ -1,9 +1,8 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/getSession";
 import { hasPermission } from "@/lib/rbac";
 
-export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
+export async function POST() {
+  const session = await getSession();
 
   if (!session) {
     return new Response("Unauthorized", { status: 401 });

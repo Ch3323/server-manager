@@ -1,9 +1,8 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/getSession";
 import si from "systeminformation";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
 
   if (!session) {
     return new Response("Unauthorized", { status: 401 });
