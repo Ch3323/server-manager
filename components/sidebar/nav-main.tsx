@@ -26,7 +26,7 @@ export function NavMain({
   }[]
 }) {
   return (
-    <SidebarGroup>
+    <SidebarGroup className="py-0">
       <SidebarMenu>
         {items.map((item) => (
           <Collapsible

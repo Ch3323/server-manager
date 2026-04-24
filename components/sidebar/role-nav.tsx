@@ -15,25 +15,12 @@ export function RoleNav({ role }: RoleNavProps) {
   const items = [
     ...(isMod
       ? [
-          {
-            title: "Manage Problems",
-            url: "/manage/problems",
-            icon: FilePenLine,
-          },
-          {
-            title: "Manage Contests",
-            url: "/manage/contests",
-            icon: Trophy,
-          },
+          
         ]
       : []),
     ...(isAdmin
       ? [
-          {
-            title: "Manage Users",
-            url: "/manage/users",
-            icon: Users,
-          },
+          
         ]
       : []),
   ]

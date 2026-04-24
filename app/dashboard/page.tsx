@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import Link from 'next/link';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 
 interface Container {
     id: string;
@@ -14,26 +17,95 @@ interface Container {
     status: string;
 }
 
+interface SystemInfo {
+    cpu: { usage: number; cores: number };
+    memory: { total: number; used: number; free: number; usedPercent: number };
+    disk: { mount: string; size: number; used: number; available: number; usedPercent: number }[];
+    uptime: number;
+    processes: {
+        all: number;
+        running: number;
+        list: { pid: number; name: string; cpu: number; mem: number; state: string }[];
+    };
+}
+
+interface ActivityLog {
+    id: string;
+    actorEmail: string;
+    actorRole: 'ADMIN' | 'MOD' | 'USER';
+    action: string;
+    containerName: string | null;
+    createdAt: string;
+}
+
+function isAxiosRejected<T>(
+    result: PromiseSettledResult<T>
+): result is PromiseRejectedResult {
+    return result.status === 'rejected';
+}
+
+function getFailedLabel(reason: unknown) {
+    if (axios.isAxiosError(reason)) {
+        const url = reason.config?.url ?? 'unknown endpoint';
+        const status = reason.response?.status;
+        if (status) return `${url} (${status})`;
+        return url;
+    }
+    return 'unknown endpoint';
+}
+
 export default function DashboardPage() {
     const [containers, setContainers] = useState<Container[]>([]);
+    const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+    const [activities, setActivities] = useState<ActivityLog[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null);
+    const [quickActionMessage, setQuickActionMessage] = useState<string | null>(null);
 
     useEffect(() => {
-        async function fetchContainers() {
+        async function fetchData() {
             try {
-                const res = await axios.get('/api/containers/list');
-                setContainers(res.data);
-            } catch (err) {
-                setError('Failed to load containers');
-                console.error(err);
+                const [containersRes, systemRes, activityRes] = await Promise.allSettled([
+                    axios.get('/api/containers/list'),
+                    axios.get('/api/system/info'),
+                    axios.get('/api/activity/recent'),
+                ]);
+
+                if (containersRes.status === 'fulfilled') {
+                    setContainers(containersRes.value.data);
+                }
+
+                if (systemRes.status === 'fulfilled') {
+                    setSystemInfo(systemRes.value.data);
+                }
+
+                if (activityRes.status === 'fulfilled') {
+                    setActivities(activityRes.value.data);
+                }
+
+                const failures = [containersRes, systemRes, activityRes].filter(isAxiosRejected);
+                if (failures.length > 0) {
+                    const failedTargets = failures.map((failure) => getFailedLabel(failure.reason));
+                    setError(`Some dashboard sections could not be loaded: ${failedTargets.join(', ')}`);
+                } else {
+                    setError(null);
+                }
             } finally {
                 setIsLoading(false);
             }
         }
 
-        fetchContainers();
+        fetchData();
     }, []);
+
+    function formatBytes(bytes: number) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
 
     function getStateColor(state: string) {
         switch (state.toLowerCase()) {
@@ -48,6 +120,67 @@ export default function DashboardPage() {
         }
     }
 
+    function formatUptime(seconds: number) {
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+
+        if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+    }
+
+    function formatActivityTime(isoDate: string) {
+        return new Date(isoDate).toLocaleString();
+    }
+
+    async function reloadDashboardData() {
+        const [containersRes, systemRes, activityRes] = await Promise.allSettled([
+            axios.get('/api/containers/list'),
+            axios.get('/api/system/info'),
+            axios.get('/api/activity/recent'),
+        ]);
+
+        if (containersRes.status === 'fulfilled') {
+            setContainers(containersRes.value.data);
+        }
+
+        if (systemRes.status === 'fulfilled') {
+            setSystemInfo(systemRes.value.data);
+        }
+
+        if (activityRes.status === 'fulfilled') {
+            setActivities(activityRes.value.data);
+        }
+    }
+
+    async function handleQuickAction(action: 'restart_all' | 'cleanup_stopped') {
+        setQuickActionLoading(action);
+        setQuickActionMessage(null);
+
+        try {
+            const res = await axios.post('/api/containers/bulk', { action });
+
+            const affected = res.data.affected ?? 0;
+            if (action === 'restart_all') {
+                setQuickActionMessage(`Restarted ${affected} running container(s)`);
+            } else {
+                setQuickActionMessage(`Cleaned up ${affected} stopped container(s)`);
+            }
+
+            await reloadDashboardData();
+        } catch (err) {
+            console.error(err);
+            setQuickActionMessage('Quick action failed');
+        } finally {
+            setQuickActionLoading(null);
+        }
+    }
+
+    const totalContainers = containers.length;
+    const runningContainers = containers.filter((container) => container.state === 'running').length;
+    const stoppedContainers = containers.filter((container) => container.state !== 'running').length;
+
     if (isLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center">
@@ -60,9 +193,186 @@ export default function DashboardPage() {
     }
 
     return (
-        <div className="p-4 md:p-8">
-            <div className="max-w-4xl mx-auto">
-                <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
+        <div className="p-4 md:p-8 space-y-6">
+            <div className="container mx-auto">
+                {error && (
+                    <div className="mb-4 p-3 bg-red-400/20 border border-red-400 text-red-400 rounded-md text-sm">
+                        {error}
+                    </div>
+                )}
+                
+                <div className="mb-3">
+                    <h2 className="text-lg font-semibold">Overview</h2>
+                    <p className="text-sm text-muted-foreground">Container summary and core resource usage</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium">Total Containers</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">{totalContainers}</div>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium">Running</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold text-green-600">{runningContainers}</div>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium">Stopped</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold text-red-500">{stoppedContainers}</div>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium">CPU Usage</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">{systemInfo?.cpu.usage.toFixed(1) ?? '0.0'}%</div>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium">RAM Usage</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">{systemInfo?.memory.usedPercent.toFixed(1) ?? '0.0'}%</div>
+                        </CardContent>
+                    </Card>
+                </div>
+
+                {systemInfo && (
+                    <div className="mb-3">
+                        <h2 className="text-lg font-semibold">System Status</h2>
+                        <p className="text-sm text-muted-foreground">Current health of this server</p>
+                    </div>
+                )}
+
+                {systemInfo && (
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium">CPU Usage</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">{systemInfo.cpu.usage.toFixed(1)}%</div>
+                                <p className="text-xs text-muted-foreground">{systemInfo.cpu.cores} cores</p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium">Memory</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">{systemInfo.memory.usedPercent.toFixed(1)}%</div>
+                                <p className="text-xs text-muted-foreground">
+                                    {formatBytes(systemInfo.memory.used)} / {formatBytes(systemInfo.memory.total)}
+                                </p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium">Disk Usage</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {systemInfo.disk[0] ? `${systemInfo.disk[0].usedPercent.toFixed(1)}%` : 'N/A'}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    {systemInfo.disk[0]
+                                        ? `${formatBytes(systemInfo.disk[0].used)} / ${formatBytes(systemInfo.disk[0].size)}`
+                                        : 'No disk data'}
+                                </p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium">Uptime</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">{formatUptime(systemInfo.uptime)}</div>
+                                <p className="text-xs text-muted-foreground">
+                                    Server running time
+                                </p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                )}
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+                    <Card className="xl:col-span-2">
+                        <CardHeader className="space-y-1">
+                            <CardTitle className="text-2xl font-bold">Recent Activity</CardTitle>
+                            <CardDescription>
+                                Latest container actions for debugging
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {activities.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No activity yet</p>
+                            ) : (
+                                <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                    {activities.map((item) => (
+                                        <div key={item.id} className="flex items-center justify-between rounded-md border p-3">
+                                            <div className="text-sm">
+                                                <span className="font-semibold">[{item.actorRole}]</span>{' '}
+                                                <span>{item.action}</span>{' '}
+                                                {item.containerName ? <span className="font-medium">{item.containerName}</span> : null}
+                                                <span className="text-muted-foreground"> by {item.actorEmail}</span>
+                                            </div>
+                                            <Badge variant="outline">{formatActivityTime(item.createdAt)}</Badge>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Quick Actions</CardTitle>
+                            <CardDescription>Shortcuts for common operations</CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => setQuickActionMessage('Create container flow is not configured yet')}
+                            >
+                                + Create container
+                            </Button>
+                            <Button
+                                variant="outline"
+                                onClick={() => setQuickActionMessage('File manager URL is not configured yet')}
+                            >
+                                Open file manager
+                            </Button>
+                            <Button
+                                onClick={() => handleQuickAction('restart_all')}
+                                disabled={quickActionLoading === 'restart_all'}
+                            >
+                                {quickActionLoading === 'restart_all' ? <Spinner className="h-4 w-4 mr-2" /> : null}
+                                Restart all
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                onClick={() => handleQuickAction('cleanup_stopped')}
+                                disabled={quickActionLoading === 'cleanup_stopped'}
+                            >
+                                {quickActionLoading === 'cleanup_stopped' ? <Spinner className="h-4 w-4 mr-2" /> : null}
+                                Cleanup stopped containers
+                            </Button>
+                        </CardContent>
+                    </Card>
+                </div>
+
                 <Card>
                     <CardHeader className="space-y-1">
                         <CardTitle className="text-2xl font-bold">Containers</CardTitle>
@@ -71,32 +381,21 @@ export default function DashboardPage() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
-                        {error && (
-                            <div className="mb-4 p-3 bg-red-400/20 border border-red-400 text-red-400 rounded-md text-sm">
-                                {error}
-                            </div>
-                        )}
-
                         {containers.length === 0 ? (
                             <p className="text-gray-500 text-center py-8">No containers found</p>
                         ) : (
-                            <div className="space-y-3">
+                            <div>
                                 {containers.map((container) => (
-                                    <div
-                                        key={container.id}
-                                        className="flex items-center justify-between p-4 border rounded-lg transition-colors"
-                                    >
-                                        <div className="flex flex-1 justify-between min-w-0">
+                                    <Button key={container.id} className="flex w-full justify-between min-w-0 px-4 py-6 rounded-none" variant={"ghost"} asChild>
+                                        <Link className="flex flex-1 justify-between items-center" href={`/dashboard/${container.name}`}>
                                             <div className="flex items-center gap-2">
-                                                <span
-                                                    className={`w-2 h-2 rounded-full ${getStateColor(container.state)}`}
-                                                ></span>
+                                                <span className={`w-2 h-2 rounded-full ${getStateColor(container.state)}`}></span>
                                                 <span className="font-medium truncate">{container.name}</span>
-                                                <p className="max-w-md text-sm text-gray-500 truncate">{container.image}</p>
+                                                <p className="text-sm text-gray-500 truncate">{container.image}</p>
                                             </div>
                                             <p className="text-xs text-gray-400 self-center">{container.status}</p>
-                                        </div>
-                                    </div>
+                                        </Link>
+                                    </Button>
                                 ))}
                             </div>
                         )}
