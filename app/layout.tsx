@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Roboto_Condensed } from "next/font/google";
+import { Roboto_Condensed } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import Providers from "@/components/session-provider";
+
 import "./globals.css";
+import { AppShell } from "@/components/app-shell";
 
 const robotoCondensed = Roboto_Condensed({
   variable: "--font-roboto-condensed",
@@ -25,14 +28,18 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          disableTransitionOnChange
-        >
-          {children}
-        </ThemeProvider>
+        <Providers>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <AppShell>
+              {children}
+            </AppShell>
+          </ThemeProvider>
+        </Providers>
       </body>
     </html>
   );

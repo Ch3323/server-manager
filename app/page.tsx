@@ -1,6 +1,5 @@
-function page() {
-  return (
-    <div>page</div>
-  )
+import { redirect } from "next/navigation";
+
+export default function redirectToDashboard() {
+  redirect("/dashboard");
 }
-export default page

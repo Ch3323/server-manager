@@ -51,10 +51,13 @@ export const authOptions: AuthOptions = {
       }
       return token;
     },
-
     async session({ session, token }: { session: Session; token: JWT }) {
-      if (session.user) {
-        (session.user as any).role = (token as any).role;
+      if (session.user && token.sub) {
+        const user = await prisma.user.findUnique({
+          where: { id: token.sub },
+          select: { role: true }
+        });
+        (session.user as any).role = user?.role;
       }
       return session;
     },
