@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
+import { hasPermission } from "@/lib/rbac";
 
 export async function POST(request: Request) {
   const session = await getServerSession(authOptions);
@@ -10,14 +11,18 @@ export async function POST(request: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  if (!["ADMIN", "MOD", "USER"].includes(session.user.role)) {
-    return new Response("Forbidden", { status: 403 });
+  if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
+    return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
   }
 
   try {
     const { action } = await request.json();
 
     if (action === "restart_all") {
+      if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
+        return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
+      }
+
       const running = await docker.listContainers({ all: false });
       await recordActivity({
         actorEmail: session.user.email,

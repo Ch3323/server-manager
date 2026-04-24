@@ -1,7 +1,7 @@
-import { withAuth } from "next-auth/middleware";
+﻿import { withAuth } from "next-auth/middleware";
 
 export default withAuth(
-  function middleware() {},
+  function proxy() {},
   {
     callbacks: {
       authorized: ({ token }) => {
@@ -14,7 +14,7 @@ export default withAuth(
   }
 );
 
-// กำหนด path ที่ต้องมี session
+// เธเธณเธซเธเธ” path เธ—เธตเนเธ•เนเธญเธเธกเธต session
 export const config = {
   matcher: [
     /*
@@ -29,3 +29,4 @@ export const config = {
     "/((?!api/auth|_next/static|_next/image|favicon.ico|auth/login|auth/register).*)",
   ],
 };
+

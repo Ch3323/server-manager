@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { LayoutDashboard, Server } from "lucide-react"
+import { Container, FileCodeCorner, Folder, LayoutDashboard } from "lucide-react"
 
 import { NavMain } from "./nav-main"
 import { NavUser, NavUserSkeleton } from "./nav-user"
@@ -19,7 +19,6 @@ import {
 import { useSession } from "next-auth/react"
 import Image from "next/image"
 
-
 const navbarMenu = {
   navMain: [
     {
@@ -27,6 +26,16 @@ const navbarMenu = {
       url: "/dashboard",
       icon: LayoutDashboard,
       isActive: true,
+    },
+    {
+      title: "Containers",
+      url: "/containers",
+      icon: Container,
+    },
+    {
+      title: "Images",
+      url: "/images",
+      icon: FileCodeCorner,
     },
   ]
 }

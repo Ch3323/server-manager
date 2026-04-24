@@ -38,8 +38,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         setItems(crumbs);
     }
 
-    useEffect(() => console.log(items), [items]);
-
     useEffect(() => {
         generateBreadcrump(pathname);
     }, [pathname]);

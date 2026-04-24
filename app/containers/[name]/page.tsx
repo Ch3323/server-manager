@@ -33,6 +33,7 @@ export default function ContainerDetailPage() {
 
     const containerId = params.name as string;
     const isAdmin = session?.user?.role === 'ADMIN';
+    const isModOrAdmin = session?.user?.role === 'ADMIN' || session?.user?.role === 'MOD';
 
     async function fetchLogs(targetContainerId: string) {
         setIsLogsLoading(true);
@@ -177,7 +178,7 @@ export default function ContainerDetailPage() {
                             </CardHeader>
                             <CardContent>
                                 <div className="flex gap-2 flex-wrap">
-                                    {container.state !== 'running' && (
+                                    {isModOrAdmin && container.state !== 'running' && (
                                         <Button
                                             onClick={() => handleAction('start')}
                                             disabled={actionLoading === 'start'}
@@ -186,7 +187,7 @@ export default function ContainerDetailPage() {
                                             Start
                                         </Button>
                                     )}
-                                    {container.state === 'running' && (
+                                    {isModOrAdmin && container.state === 'running' && (
                                         <>
                                             <Button
                                                 variant="outline"
@@ -215,6 +216,11 @@ export default function ContainerDetailPage() {
                                             {actionLoading === 'remove' ? <Spinner className="h-4 w-4 mr-2" /> : null}
                                             Delete
                                         </Button>
+                                    )}
+                                    {!isModOrAdmin && (
+                                        <p className="text-sm text-muted-foreground">
+                                            Read-only mode: USER can only view container details and logs.
+                                        </p>
                                     )}
                                 </div>
                             </CardContent>

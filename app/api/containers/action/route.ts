@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
+import { hasPermission } from "@/lib/rbac";
 
 export async function POST(request: Request) {
   const session = await getServerSession(authOptions);
@@ -10,12 +11,12 @@ export async function POST(request: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  if (!["ADMIN", "MOD", "USER"].includes(session.user.role)) {
-    return new Response("Forbidden", { status: 403 });
+  if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
+    return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
   }
 
   try {
-    const { containerId, action } = await request.json();
+    const { containerId, action, newName } = await request.json();
     const container = docker.getContainer(containerId);
     const inspect = await container.inspect();
     const containerName = inspect.Name?.replace("/", "") || containerId;
@@ -85,6 +86,29 @@ export async function POST(request: Request) {
           containerName,
         }))) {
           console.warn("Activity log was not recorded for remove", { containerName, user: session.user.email });
+        }
+        break;
+      case "rename":
+        if (session.user.role !== "ADMIN") {
+          return new Response("Forbidden - Admin only", { status: 403 });
+        }
+        if (!newName || typeof newName !== "string") {
+          return new Response("New container name required", { status: 400 });
+        }
+        await recordActivity({
+          actorEmail: session.user.email,
+          actorRole: session.user.role,
+          action: "requested rename container",
+          containerName,
+        });
+        await container.rename({ name: newName });
+        if (!(await recordActivity({
+          actorEmail: session.user.email,
+          actorRole: session.user.role,
+          action: `renamed container to ${newName}`,
+          containerName: newName,
+        }))) {
+          console.warn("Activity log was not recorded for rename", { containerName, newName, user: session.user.email });
         }
         break;
       default:

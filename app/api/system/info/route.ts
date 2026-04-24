@@ -10,8 +10,9 @@ export async function GET() {
   }
 
   try {
-    const [cpu, mem, disk, processes, time] = await Promise.all([
+    const [load, cpuInfo, mem, disk, processes, time] = await Promise.all([
       si.currentLoad(),
+      si.cpu(),
       si.mem(),
       si.fsSize(),
       si.processes(),
@@ -20,8 +21,9 @@ export async function GET() {
 
     return Response.json({
       cpu: {
-        usage: cpu.currentLoad,
-        cores: cpu.cpus?.length || 0,
+        usage: load.currentLoad,
+        cores: cpuInfo.physicalCores || cpuInfo.cores || 0,
+        logicalProcessors: load.cpus?.length || 0,
       },
       memory: {
         total: mem.total,

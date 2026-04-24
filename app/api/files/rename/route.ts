@@ -1,0 +1,31 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { renamePath } from "@/lib/file-manager";
+
+export async function POST(request: Request) {
+  const session = await getServerSession(authOptions);
+
+  if (!session) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  if (session.user.role !== "ADMIN") {
+    return new Response("Forbidden - Admin only", { status: 403 });
+  }
+
+  try {
+    const body = await request.json();
+    const fromPath = typeof body?.fromPath === "string" ? body.fromPath : "";
+    const toPath = typeof body?.toPath === "string" ? body.toPath : "";
+
+    if (!fromPath || !toPath) {
+      return new Response("fromPath and toPath required", { status: 400 });
+    }
+
+    await renamePath(fromPath, toPath);
+    return Response.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    return new Response("Failed to rename path", { status: 500 });
+  }
+}

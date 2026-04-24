@@ -3,11 +3,30 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
+import { redirect } from 'next/navigation';
 
 interface Container {
     id: string;
@@ -38,6 +57,13 @@ interface ActivityLog {
     createdAt: string;
 }
 
+type QuickActionType = 'restart_all' | 'cleanup_stopped';
+interface ImageOption {
+    id: string;
+    primaryTag: string;
+    isDangling: boolean;
+}
+
 function isAxiosRejected<T>(
     result: PromiseSettledResult<T>
 ): result is PromiseRejectedResult {
@@ -54,7 +80,15 @@ function getFailedLabel(reason: unknown) {
     return 'unknown endpoint';
 }
 
+function getUsageTextColor(usagePercent: number) {
+    if (usagePercent >= 90) return 'text-red-500';
+    if (usagePercent >= 75) return 'text-orange-500';
+    if (usagePercent >= 55) return 'text-yellow-500';
+    return 'text-emerald-500';
+}
+
 export default function DashboardPage() {
+    const { data: session } = useSession();
     const [containers, setContainers] = useState<Container[]>([]);
     const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
     const [activities, setActivities] = useState<ActivityLog[]>([]);
@@ -62,14 +96,22 @@ export default function DashboardPage() {
     const [error, setError] = useState<string | null>(null);
     const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null);
     const [quickActionMessage, setQuickActionMessage] = useState<string | null>(null);
+    const [pendingQuickAction, setPendingQuickAction] = useState<QuickActionType | null>(null);
+    const [imageOptions, setImageOptions] = useState<ImageOption[]>([]);
+    const [createDialogOpen, setCreateDialogOpen] = useState(false);
+    const [createImageRef, setCreateImageRef] = useState('');
+    const [createContainerName, setCreateContainerName] = useState('');
+    const [startAfterCreate, setStartAfterCreate] = useState(true);
+    const [isCreatingContainer, setIsCreatingContainer] = useState(false);
 
     useEffect(() => {
         async function fetchData() {
             try {
-                const [containersRes, systemRes, activityRes] = await Promise.allSettled([
+                const [containersRes, systemRes, activityRes, imagesRes] = await Promise.allSettled([
                     axios.get('/api/containers/list'),
                     axios.get('/api/system/info'),
                     axios.get('/api/activity/recent'),
+                    axios.get('/api/images/list'),
                 ]);
 
                 if (containersRes.status === 'fulfilled') {
@@ -84,7 +126,15 @@ export default function DashboardPage() {
                     setActivities(activityRes.value.data);
                 }
 
-                const failures = [containersRes, systemRes, activityRes].filter(isAxiosRejected);
+                if (imagesRes.status === 'fulfilled') {
+                    const usableImages = (imagesRes.value.data as ImageOption[]).filter((img) => !img.isDangling);
+                    setImageOptions(usableImages);
+                    if (usableImages.length > 0) {
+                        setCreateImageRef(usableImages[0].primaryTag);
+                    }
+                }
+
+                const failures = [containersRes, systemRes, activityRes, imagesRes].filter(isAxiosRejected);
                 if (failures.length > 0) {
                     const failedTargets = failures.map((failure) => getFailedLabel(failure.reason));
                     setError(`Some dashboard sections could not be loaded: ${failedTargets.join(', ')}`);
@@ -135,10 +185,11 @@ export default function DashboardPage() {
     }
 
     async function reloadDashboardData() {
-        const [containersRes, systemRes, activityRes] = await Promise.allSettled([
+        const [containersRes, systemRes, activityRes, imagesRes] = await Promise.allSettled([
             axios.get('/api/containers/list'),
             axios.get('/api/system/info'),
             axios.get('/api/activity/recent'),
+            axios.get('/api/images/list'),
         ]);
 
         if (containersRes.status === 'fulfilled') {
@@ -152,9 +203,17 @@ export default function DashboardPage() {
         if (activityRes.status === 'fulfilled') {
             setActivities(activityRes.value.data);
         }
+
+        if (imagesRes.status === 'fulfilled') {
+            const usableImages = (imagesRes.value.data as ImageOption[]).filter((img) => !img.isDangling);
+            setImageOptions(usableImages);
+            if (usableImages.length > 0 && !usableImages.some((img) => img.primaryTag === createImageRef)) {
+                setCreateImageRef(usableImages[0].primaryTag);
+            }
+        }
     }
 
-    async function handleQuickAction(action: 'restart_all' | 'cleanup_stopped') {
+    async function handleQuickAction(action: QuickActionType) {
         setQuickActionLoading(action);
         setQuickActionMessage(null);
 
@@ -177,9 +236,52 @@ export default function DashboardPage() {
         }
     }
 
+    async function handleCreateContainer() {
+        if (!createImageRef) return;
+
+        setIsCreatingContainer(true);
+        setQuickActionMessage(null);
+
+        try {
+            const res = await axios.post('/api/containers/create', {
+                imageRef: createImageRef,
+                containerName: createContainerName.trim(),
+                startAfterCreate,
+            });
+
+            const createdName = res.data?.name ?? 'container';
+            setQuickActionMessage(`Created ${createdName}${startAfterCreate ? ' and started it' : ''}`);
+            setCreateDialogOpen(false);
+            setCreateContainerName('');
+            await reloadDashboardData();
+        } catch (err) {
+            console.error(err);
+            setQuickActionMessage('Create container failed');
+        } finally {
+            setIsCreatingContainer(false);
+        }
+    }
+
+    function requestQuickActionConfirmation(action: QuickActionType) {
+        setPendingQuickAction(action);
+    }
+
     const totalContainers = containers.length;
     const runningContainers = containers.filter((container) => container.state === 'running').length;
     const stoppedContainers = containers.filter((container) => container.state !== 'running').length;
+    const isAdmin = session?.user?.role === 'ADMIN';
+    const canRestartAll = session?.user?.role === 'ADMIN' || session?.user?.role === 'MOD';
+    const canCleanupStopped = session?.user?.role === 'ADMIN';
+    const canViewQuickActions = session?.user?.role === 'ADMIN' || session?.user?.role === 'MOD';
+    const confirmationTitle =
+        pendingQuickAction === 'restart_all' ? 'Confirm restart all containers' : 'Confirm cleanup stopped containers';
+    const confirmationDescription =
+        pendingQuickAction === 'restart_all'
+            ? `This will restart ${runningContainers} running container(s). Services may be briefly interrupted.`
+            : `This will permanently remove ${stoppedContainers} stopped container(s). This action cannot be undone.`;
+    const cpuUsagePercent = systemInfo?.cpu.usage ?? 0;
+    const memoryUsagePercent = systemInfo?.memory.usedPercent ?? 0;
+    const diskUsagePercent = systemInfo?.disk[0]?.usedPercent ?? 0;
 
     if (isLoading) {
         return (
@@ -200,13 +302,18 @@ export default function DashboardPage() {
                         {error}
                     </div>
                 )}
-                
+                {quickActionMessage && (
+                    <div className="mb-4 p-3 bg-green-400/20 border border-green-400 text-green-500 rounded-md text-sm">
+                        {quickActionMessage}
+                    </div>
+                )}
+
                 <div className="mb-3">
                     <h2 className="text-lg font-semibold">Overview</h2>
-                    <p className="text-sm text-muted-foreground">Container summary and core resource usage</p>
+                    <p className="text-sm text-muted-foreground">Container summary</p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
                     <Card>
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium">Total Containers</CardTitle>
@@ -220,7 +327,7 @@ export default function DashboardPage() {
                             <CardTitle className="text-sm font-medium">Running</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold text-green-600">{runningContainers}</div>
+                            <div className="text-2xl font-bold text-green-400">{runningContainers}</div>
                         </CardContent>
                     </Card>
                     <Card>
@@ -228,23 +335,7 @@ export default function DashboardPage() {
                             <CardTitle className="text-sm font-medium">Stopped</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold text-red-500">{stoppedContainers}</div>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium">CPU Usage</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{systemInfo?.cpu.usage.toFixed(1) ?? '0.0'}%</div>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium">RAM Usage</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{systemInfo?.memory.usedPercent.toFixed(1) ?? '0.0'}%</div>
+                            <div className="text-2xl font-bold text-red-400">{stoppedContainers}</div>
                         </CardContent>
                     </Card>
                 </div>
@@ -263,7 +354,9 @@ export default function DashboardPage() {
                                 <CardTitle className="text-sm font-medium">CPU Usage</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <div className="text-2xl font-bold">{systemInfo.cpu.usage.toFixed(1)}%</div>
+                                <div className={`text-2xl font-bold ${getUsageTextColor(systemInfo.cpu.usage)}`}>
+                                    {systemInfo.cpu.usage.toFixed(1)}%
+                                </div>
                                 <p className="text-xs text-muted-foreground">{systemInfo.cpu.cores} cores</p>
                             </CardContent>
                         </Card>
@@ -272,7 +365,9 @@ export default function DashboardPage() {
                                 <CardTitle className="text-sm font-medium">Memory</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <div className="text-2xl font-bold">{systemInfo.memory.usedPercent.toFixed(1)}%</div>
+                                <div className={`text-2xl font-bold ${getUsageTextColor(systemInfo.memory.usedPercent)}`}>
+                                    {systemInfo.memory.usedPercent.toFixed(1)}%
+                                </div>
                                 <p className="text-xs text-muted-foreground">
                                     {formatBytes(systemInfo.memory.used)} / {formatBytes(systemInfo.memory.total)}
                                 </p>
@@ -283,7 +378,7 @@ export default function DashboardPage() {
                                 <CardTitle className="text-sm font-medium">Disk Usage</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <div className="text-2xl font-bold">
+                                <div className={`text-2xl font-bold ${getUsageTextColor(diskUsagePercent)}`}>
                                     {systemInfo.disk[0] ? `${systemInfo.disk[0].usedPercent.toFixed(1)}%` : 'N/A'}
                                 </div>
                                 <p className="text-xs text-muted-foreground">
@@ -307,8 +402,8 @@ export default function DashboardPage() {
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
-                    <Card className="xl:col-span-2">
+                <div className={`grid grid-cols-1 ${canViewQuickActions ? 'xl:grid-cols-3' : ''} gap-6 mb-6`}>
+                    <Card className={canViewQuickActions ? 'xl:col-span-2' : ''}>
                         <CardHeader className="space-y-1">
                             <CardTitle className="text-2xl font-bold">Recent Activity</CardTitle>
                             <CardDescription>
@@ -336,41 +431,51 @@ export default function DashboardPage() {
                         </CardContent>
                     </Card>
 
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Quick Actions</CardTitle>
-                            <CardDescription>Shortcuts for common operations</CardDescription>
-                        </CardHeader>
-                        <CardContent className="grid gap-2">
-                            <Button
-                                variant="outline"
-                                onClick={() => setQuickActionMessage('Create container flow is not configured yet')}
-                            >
-                                + Create container
-                            </Button>
-                            <Button
-                                variant="outline"
-                                onClick={() => setQuickActionMessage('File manager URL is not configured yet')}
-                            >
-                                Open file manager
-                            </Button>
-                            <Button
-                                onClick={() => handleQuickAction('restart_all')}
-                                disabled={quickActionLoading === 'restart_all'}
-                            >
-                                {quickActionLoading === 'restart_all' ? <Spinner className="h-4 w-4 mr-2" /> : null}
-                                Restart all
-                            </Button>
-                            <Button
-                                variant="destructive"
-                                onClick={() => handleQuickAction('cleanup_stopped')}
-                                disabled={quickActionLoading === 'cleanup_stopped'}
-                            >
-                                {quickActionLoading === 'cleanup_stopped' ? <Spinner className="h-4 w-4 mr-2" /> : null}
-                                Cleanup stopped containers
-                            </Button>
-                        </CardContent>
-                    </Card>
+                    {canViewQuickActions && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Quick Actions</CardTitle>
+                                <CardDescription>Shortcuts for common operations</CardDescription>
+                            </CardHeader>
+                            <CardContent className="grid gap-2">
+                                {isAdmin && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => setCreateDialogOpen(true)}
+                                    >
+                                        + Create container
+                                    </Button>
+                                )}
+                                {isAdmin && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => redirect("/files")}
+                                    >
+                                        Open file manager
+                                    </Button>
+                                )}
+                                {canRestartAll && (
+                                    <Button
+                                        onClick={() => requestQuickActionConfirmation('restart_all')}
+                                        disabled={quickActionLoading === 'restart_all' || runningContainers === 0}
+                                    >
+                                        {quickActionLoading === 'restart_all' ? <Spinner className="h-4 w-4 mr-2" /> : null}
+                                        Restart all
+                                    </Button>
+                                )}
+                                {canCleanupStopped && (
+                                    <Button
+                                        variant="destructive"
+                                        onClick={() => requestQuickActionConfirmation('cleanup_stopped')}
+                                        disabled={quickActionLoading === 'cleanup_stopped' || stoppedContainers === 0}
+                                    >
+                                        {quickActionLoading === 'cleanup_stopped' ? <Spinner className="h-4 w-4 mr-2" /> : null}
+                                        Cleanup stopped containers
+                                    </Button>
+                                )}
+                            </CardContent>
+                        </Card>
+                    )}
                 </div>
 
                 <Card>
@@ -387,7 +492,7 @@ export default function DashboardPage() {
                             <div>
                                 {containers.map((container) => (
                                     <Button key={container.id} className="flex w-full justify-between min-w-0 px-4 py-6 rounded-none" variant={"ghost"} asChild>
-                                        <Link className="flex flex-1 justify-between items-center" href={`/dashboard/${container.name}`}>
+                                        <Link className="flex flex-1 justify-between items-center" href={`/containers/${container.name}`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-2 rounded-full ${getStateColor(container.state)}`}></span>
                                                 <span className="font-medium truncate">{container.name}</span>
@@ -402,6 +507,95 @@ export default function DashboardPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            <Dialog open={pendingQuickAction !== null} onOpenChange={(open) => !open && setPendingQuickAction(null)}>
+                <DialogContent showCloseButton={false}>
+                    <DialogHeader>
+                        <DialogTitle>{confirmationTitle}</DialogTitle>
+                        <DialogDescription>{confirmationDescription}</DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setPendingQuickAction(null)}
+                            disabled={quickActionLoading !== null}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant={pendingQuickAction === 'cleanup_stopped' ? 'destructive' : 'default'}
+                            onClick={async () => {
+                                if (!pendingQuickAction) return;
+                                const action = pendingQuickAction;
+                                setPendingQuickAction(null);
+                                await handleQuickAction(action);
+                            }}
+                            disabled={quickActionLoading !== null}
+                        >
+                            Confirm
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+                <DialogContent showCloseButton={false}>
+                    <DialogHeader>
+                        <DialogTitle>Create Container</DialogTitle>
+                        <DialogDescription>
+                            Create a new container from a pulled image.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                        <div className="space-y-1">
+                            <p className="text-sm font-medium">Image</p>
+                            <Select value={createImageRef} onValueChange={setCreateImageRef}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select image" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {imageOptions.map((img) => (
+                                        <SelectItem key={img.id} value={img.primaryTag}>
+                                            {img.primaryTag}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-1">
+                            <p className="text-sm font-medium">Container Name (optional)</p>
+                            <Input
+                                value={createContainerName}
+                                onChange={(e) => setCreateContainerName(e.target.value)}
+                                placeholder="my-app-container"
+                            />
+                        </div>
+                        <label className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                                checked={startAfterCreate}
+                                onCheckedChange={(checked) => setStartAfterCreate(checked === true)}
+                            />
+                            Start container immediately after create
+                        </label>
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setCreateDialogOpen(false)}
+                            disabled={isCreatingContainer}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={() => void handleCreateContainer()}
+                            disabled={isCreatingContainer || createImageRef.length === 0}
+                        >
+                            {isCreatingContainer ? <Spinner className="h-4 w-4 mr-2" /> : null}
+                            Create
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
