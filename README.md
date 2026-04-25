@@ -75,3 +75,42 @@ newgrp docker
 npm run build
 npm run start
 ```
+
+## Docker on Ubuntu
+
+This project includes a production-oriented container setup for Ubuntu in
+`docker-compose.yml`.
+
+1. Update `.env` for Ubuntu:
+
+```bash
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=replace-with-a-strong-password
+POSTGRES_DB=server_manager
+NEXTAUTH_URL=http://YOUR_SERVER_IP:3000
+NEXTAUTH_SECRET=replace-with-a-long-random-secret
+ALLOW_PUBLIC_REGISTRATION=false
+CORS_ALLOWED_ORIGINS=
+```
+
+2. Ensure the Ubuntu host path `/home/nxdus` exists, since the file manager and
+terminal are mounted there by default.
+
+3. Build and start the stack:
+
+```bash
+docker compose up -d --build
+```
+
+4. Check logs:
+
+```bash
+docker compose logs -f app
+```
+
+Good to know:
+
+- The app container uses Next.js `output: "standalone"` for a smaller runtime image.
+- On Ubuntu, the app container mounts `/var/run/docker.sock` so it can manage the host Docker Engine.
+- The file manager and terminal are intentionally limited to `/home/nxdus` from the Ubuntu host by default.
+- Put nginx or Caddy in front of port `3000` before exposing this publicly.

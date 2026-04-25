@@ -5,7 +5,6 @@ import {
   buildOptionsResponse,
   enforceRequestSecurity,
   jsonResponse,
-  textResponse,
 } from "@/lib/api-security";
 
 const registerSchema = z.object({
@@ -38,7 +37,11 @@ export async function POST(req: Request) {
   }
 
   if (process.env.ALLOW_PUBLIC_REGISTRATION === "false") {
-    return textResponse(req, "Public registration is disabled", { status: 403 });
+    return jsonResponse(
+      req,
+      { error: "Public registration is disabled" },
+      { status: 403 }
+    );
   }
 
   const parsedBody = registerSchema.safeParse(await req.json());

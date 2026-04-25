@@ -10,7 +10,6 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Form,
   FormControl,
@@ -22,7 +21,12 @@ import {
 
 const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  password: z
+    .string()
+    .min(12, 'Password must be at least 12 characters')
+    .regex(/[a-z]/, 'Password must include a lowercase letter')
+    .regex(/[A-Z]/, 'Password must include an uppercase letter')
+    .regex(/[0-9]/, 'Password must include a number'),
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
@@ -30,6 +34,22 @@ const registerSchema = z.object({
 });
 
 type RegisterFormValues = z.infer<typeof registerSchema>;
+
+async function parseApiResponse(response: Response) {
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    return response.json() as Promise<{
+      error?: string;
+      message?: string;
+      details?: Record<string, string[] | undefined>;
+      success?: boolean;
+    }>;
+  }
+
+  const text = await response.text();
+  return { error: text || 'Registration failed. Please try again.' };
+}
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -62,10 +82,10 @@ export default function RegisterPage() {
         }),
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok) {
-        setError(data.message || 'Registration failed. Please try again.');
+        setError(data.error || data.message || 'Registration failed. Please try again.');
         return;
       }
 
