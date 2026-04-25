@@ -1,15 +1,22 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
 
-export async function GET() {
-  const session = await getSession();
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+export async function GET(request: Request) {
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD", "USER"],
+  });
 
-  if (!["ADMIN", "MOD", "USER"].includes(session.user.role)) {
-    return new Response("Forbidden", { status: 403 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -33,9 +40,9 @@ export async function GET() {
       };
     });
 
-    return Response.json(result);
+    return jsonResponse(request, result);
   } catch (err) {
     console.error(err);
-    return new Response("Docker image list error", { status: 500 });
+    return textResponse(request, "Docker image list error", { status: 500 });
   }
 }

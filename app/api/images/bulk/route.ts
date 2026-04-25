@@ -1,23 +1,37 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN"],
+    rateLimit: {
+      key: "image-bulk-action",
+      limit: 10,
+      windowMs: 60_000,
+    },
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
-  }
+  const { session } = auth;
 
   try {
     const { action } = await request.json();
 
     if (action !== "prune_dangling") {
-      return new Response("Invalid image bulk action", { status: 400 });
+      return textResponse(request, "Invalid image bulk action", { status: 400 });
     }
 
     await recordActivity({
@@ -41,13 +55,13 @@ export async function POST(request: Request) {
       action: `pruned dangling images (${deletedImages})`,
     });
 
-    return Response.json({
+    return jsonResponse(request, {
       success: true,
       deletedImages,
       reclaimedSpace,
     });
   } catch (err) {
     console.error(err);
-    return new Response("Docker image bulk error", { status: 500 });
+    return textResponse(request, "Docker image bulk error", { status: 500 });
   }
 }

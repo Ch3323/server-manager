@@ -1,23 +1,37 @@
-import { getSession } from "@/lib/getSession";
 import {
   createTerminalTicket,
   ensureTerminalWsServer,
   getTerminalRootPath,
   resolveWsUrlFromRequest,
 } from "@/lib/terminal-ws-server";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
 
 export const runtime = "nodejs";
 
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
+
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN"],
+    rateLimit: {
+      key: "terminal-ws-ticket",
+      limit: 20,
+      windowMs: 60_000,
+    },
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
-  }
+  const { session } = auth;
 
   try {
     const wsServer = await ensureTerminalWsServer();
@@ -35,13 +49,13 @@ export async function POST(request: Request) {
       wsPath: wsServer.path,
     });
 
-    return Response.json({
+    return jsonResponse(request, {
       wsUrl: `${baseWsUrl}?token=${encodeURIComponent(ticket.token)}`,
       cwd: rootPath,
       expiresInMs: ticket.expiresInMs,
     });
   } catch (error) {
     console.error(error);
-    return new Response("Failed to initialize live terminal", { status: 500 });
+    return textResponse(request, "Failed to initialize live terminal", { status: 500 });
   }
 }

@@ -1,11 +1,22 @@
-import { getSession } from "@/lib/getSession";
 import si from "systeminformation";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
 
-export async function GET() {
-  const session = await getSession();
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+export async function GET(request: Request) {
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD", "USER"],
+  });
+
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -18,7 +29,7 @@ export async function GET() {
       si.time(),
     ]);
 
-    return Response.json({
+    return jsonResponse(request, {
       cpu: {
         usage: load.currentLoad,
         cores: cpuInfo.physicalCores || cpuInfo.cores || 0,
@@ -54,6 +65,6 @@ export async function GET() {
     });
   } catch (err) {
     console.error(err);
-    return new Response("System error", { status: 500 });
+    return textResponse(request, "System error", { status: 500 });
   }
 }

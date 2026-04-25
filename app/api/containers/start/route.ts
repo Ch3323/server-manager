@@ -1,18 +1,25 @@
-import { getSession } from "@/lib/getSession";
-import { hasPermission } from "@/lib/rbac";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+} from "@/lib/api-security";
 
-export async function POST() {
-  const session = await getSession();
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+export async function POST(request: Request) {
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD"],
+  });
+
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
-    return new Response("Forbidden", { status: 403 });
-  }
+  const { session } = auth;
 
-  return Response.json({
+  return jsonResponse(request, {
     message: "Container started",
     by: session.user.email,
   });

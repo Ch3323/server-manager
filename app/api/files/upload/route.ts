@@ -1,6 +1,11 @@
 import path from "node:path";
-import { getSession } from "@/lib/getSession";
 import { writeBinaryFile } from "@/lib/file-manager";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
 
 function joinPath(base: string, name: string) {
   if (!base) return name;
@@ -19,14 +24,17 @@ function sanitizeRelativePath(input: string) {
 }
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN"],
+    rateLimit: {
+      key: "file-upload",
+      limit: 30,
+      windowMs: 60_000,
+    },
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -41,7 +49,7 @@ export async function POST(request: Request) {
     const overwrite = String(formData.get("overwrite") ?? "false") === "true";
 
     if (!(file instanceof File)) {
-      return new Response("file required", { status: 400 });
+      return textResponse(request, "file required", { status: 400 });
     }
 
     const targetRelativePath = relativePath
@@ -51,7 +59,7 @@ export async function POST(request: Request) {
     const binaryContent = new Uint8Array(await file.arrayBuffer());
 
     await writeBinaryFile(targetPath, binaryContent, { overwrite });
-    return Response.json({
+    return jsonResponse(request, {
       success: true,
       path: targetPath,
       name: path.posix.basename(targetRelativePath),
@@ -60,12 +68,16 @@ export async function POST(request: Request) {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "EACCES" || code === "EPERM") {
-      return new Response("Access denied for this path", { status: 403 });
+      return textResponse(request, "Access denied for this path", { status: 403 });
     }
     if (code === "EEXIST") {
-      return new Response("File already exists", { status: 409 });
+      return textResponse(request, "File already exists", { status: 409 });
     }
     console.error(err);
-    return new Response("Failed to upload file", { status: 500 });
+    return textResponse(request, "Failed to upload file", { status: 500 });
   }
+}
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
 }

@@ -1,15 +1,22 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function GET(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD", "USER"],
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  if (!["ADMIN", "MOD", "USER"].includes(session.user.role)) {
-    return new Response("Forbidden", { status: 403 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -18,7 +25,7 @@ export async function GET(request: Request) {
     const tail = searchParams.get("tail") || "100";
 
     if (!containerId) {
-      return new Response("Container ID required", { status: 400 });
+      return textResponse(request, "Container ID required", { status: 400 });
     }
 
     const container = docker.getContainer(containerId);
@@ -38,9 +45,9 @@ export async function GET(request: Request) {
       .filter(line => line.trim())
       .join('\n');
 
-    return Response.json({ logs: cleanLogs });
+    return jsonResponse(request, { logs: cleanLogs });
   } catch (err) {
     console.error(err);
-    return new Response("Docker error", { status: 500 });
+    return textResponse(request, "Docker error", { status: 500 });
   }
 }

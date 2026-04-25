@@ -1,18 +1,31 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
-import { hasPermission } from "@/lib/rbac";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD"],
+    rateLimit: {
+      key: "container-action",
+      limit: 60,
+      windowMs: 60_000,
+    },
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
-    return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
-  }
+  const { session } = auth;
 
   try {
     const { containerId, action, newName } = await request.json();
@@ -69,7 +82,7 @@ export async function POST(request: Request) {
       case "remove":
         // Only ADMIN can delete
         if (session.user.role !== "ADMIN") {
-          return new Response("Forbidden - Admin only", { status: 403 });
+          return textResponse(request, "Forbidden - Admin only", { status: 403 });
         }
         await recordActivity({
           actorEmail: session.user.email,
@@ -89,10 +102,10 @@ export async function POST(request: Request) {
         break;
       case "rename":
         if (session.user.role !== "ADMIN") {
-          return new Response("Forbidden - Admin only", { status: 403 });
+          return textResponse(request, "Forbidden - Admin only", { status: 403 });
         }
         if (!newName || typeof newName !== "string") {
-          return new Response("New container name required", { status: 400 });
+          return textResponse(request, "New container name required", { status: 400 });
         }
         await recordActivity({
           actorEmail: session.user.email,
@@ -111,12 +124,12 @@ export async function POST(request: Request) {
         }
         break;
       default:
-        return new Response("Invalid action", { status: 400 });
+        return textResponse(request, "Invalid action", { status: 400 });
     }
 
-    return Response.json({ success: true });
+    return jsonResponse(request, { success: true });
   } catch (err) {
     console.error(err);
-    return new Response("Docker error", { status: 500 });
+    return textResponse(request, "Docker error", { status: 500 });
   }
 }

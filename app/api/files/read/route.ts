@@ -1,15 +1,20 @@
-import { getSession } from "@/lib/getSession";
 import { readTextFile } from "@/lib/file-manager";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function GET(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -17,13 +22,13 @@ export async function GET(request: Request) {
     const targetPath = url.searchParams.get("path");
 
     if (!targetPath) {
-      return new Response("path required", { status: 400 });
+      return textResponse(request, "path required", { status: 400 });
     }
 
     const content = await readTextFile(targetPath);
-    return Response.json({ path: targetPath, content });
+    return jsonResponse(request, { path: targetPath, content });
   } catch (err) {
     console.error(err);
-    return new Response("Failed to read file", { status: 500 });
+    return textResponse(request, "Failed to read file", { status: 500 });
   }
 }

@@ -1,15 +1,20 @@
-import { getSession } from "@/lib/getSession";
 import { deletePath } from "@/lib/file-manager";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -17,17 +22,17 @@ export async function POST(request: Request) {
     const targetPath = typeof body?.path === "string" ? body.path : "";
 
     if (!targetPath) {
-      return new Response("path required", { status: 400 });
+      return textResponse(request, "path required", { status: 400 });
     }
 
     await deletePath(targetPath);
-    return Response.json({ success: true });
+    return jsonResponse(request, { success: true });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "EACCES" || code === "EPERM") {
-      return new Response("Access denied for this path", { status: 403 });
+      return textResponse(request, "Access denied for this path", { status: 403 });
     }
     console.error(err);
-    return new Response("Failed to delete path", { status: 500 });
+    return textResponse(request, "Failed to delete path", { status: 500 });
   }
 }

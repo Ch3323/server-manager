@@ -1,20 +1,25 @@
-import { getSession } from "@/lib/getSession";
 import {
   getWorkspaceRootName,
   listDirectory,
   resolveWorkspacePath,
   toRelativeWorkspacePath,
 } from "@/lib/file-manager";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function GET(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
   try {
@@ -23,7 +28,7 @@ export async function GET(request: Request) {
     const normalizedPath = toRelativeWorkspacePath(resolveWorkspacePath(targetPath));
     const entries = await listDirectory(normalizedPath);
 
-    return Response.json({
+    return jsonResponse(request, {
       rootName: getWorkspaceRootName(),
       currentPath: normalizedPath,
       entries,
@@ -31,12 +36,12 @@ export async function GET(request: Request) {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "EACCES" || code === "EPERM") {
-      return new Response("Access denied for this directory", { status: 403 });
+      return textResponse(request, "Access denied for this directory", { status: 403 });
     }
     if (code === "ENOENT") {
-      return new Response("Directory not found", { status: 404 });
+      return textResponse(request, "Directory not found", { status: 404 });
     }
     console.error(err);
-    return new Response("Failed to list files", { status: 500 });
+    return textResponse(request, "Failed to list files", { status: 500 });
   }
 }

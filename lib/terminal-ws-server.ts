@@ -9,7 +9,7 @@ import { getTerminalStartPath } from "@/lib/runtime-config";
 
 const WS_PATH = "/ws/terminal";
 const WS_PORT = Number(process.env.TERMINAL_WS_PORT ?? "3002");
-const WS_HOST = process.env.TERMINAL_WS_HOST ?? "0.0.0.0";
+const WS_HOST = process.env.TERMINAL_WS_HOST ?? "127.0.0.1";
 const TICKET_TTL_MS = 45_000;
 
 type Ticket = {
@@ -129,6 +129,31 @@ function normalizeCdTarget(rawTarget: string, currentCwd: string) {
   return path.resolve(currentCwd, unquoted);
 }
 
+function getAllowedWsOrigins(req: import("node:http").IncomingMessage) {
+  const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const appUrl = process.env.NEXTAUTH_URL?.trim();
+  const requestHost = req.headers.host ? `http://${req.headers.host}` : null;
+  const requestHostHttps = req.headers.host ? `https://${req.headers.host}` : null;
+
+  return new Set(
+    [appUrl, requestHost, requestHostHttps, ...configuredOrigins]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.replace(/\/+$/, ""))
+  );
+}
+
+function isAllowedWsOrigin(req: import("node:http").IncomingMessage) {
+  const origin = req.headers.origin?.trim();
+  if (!origin) {
+    return true;
+  }
+
+  return getAllowedWsOrigins(req).has(origin.replace(/\/+$/, ""));
+}
+
 function bindTerminalSession(socket: WebSocket, ticket: Ticket) {
   const { shell, args } = getShellConfig();
   let currentCwd = ticket.cwd;
@@ -239,6 +264,11 @@ async function startServer(state: WsState) {
     });
 
     wss.on("connection", (socket, req) => {
+      if (!isAllowedWsOrigin(req)) {
+        socket.close(1008, "origin not allowed");
+        return;
+      }
+
       const base = `http://${req.headers.host ?? "localhost"}`;
       const url = new URL(req.url ?? state.path, base);
       const token = url.searchParams.get("token");

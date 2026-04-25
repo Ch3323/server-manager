@@ -1,17 +1,24 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (session.user.role !== "ADMIN") {
-    return new Response("Forbidden - Admin only", { status: 403 });
-  }
+  const { session } = auth;
 
   try {
     const body = await request.json();
@@ -20,7 +27,7 @@ export async function POST(request: Request) {
     const startAfterCreate = Boolean(body?.startAfterCreate);
 
     if (!imageRef) {
-      return new Response("imageRef required", { status: 400 });
+      return textResponse(request, "imageRef required", { status: 400 });
     }
 
     const image = docker.getImage(imageRef);
@@ -28,7 +35,7 @@ export async function POST(request: Request) {
     try {
       await image.inspect();
     } catch {
-      return new Response(`Image not found: ${imageRef}`, { status: 404 });
+      return textResponse(request, `Image not found: ${imageRef}`, { status: 404 });
     }
 
     await recordActivity({
@@ -56,7 +63,7 @@ export async function POST(request: Request) {
       containerName: createdContainerName,
     });
 
-    return Response.json({
+    return jsonResponse(request, {
       success: true,
       id: container.id,
       name: createdContainerName,
@@ -64,6 +71,6 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     console.error(err);
-    return new Response("Container create error", { status: 500 });
+    return textResponse(request, "Container create error", { status: 500 });
   }
 }

@@ -1,25 +1,39 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
 import { hasPermission } from "@/lib/rbac";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
+}
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD"],
+    rateLimit: {
+      key: "container-bulk-action",
+      limit: 20,
+      windowMs: 60_000,
+    },
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
-    return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
-  }
+  const { session } = auth;
 
   try {
     const { action } = await request.json();
 
     if (action === "restart_all") {
       if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
-        return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
+        return textResponse(request, "Forbidden - MOD or ADMIN only", { status: 403 });
       }
 
       const running = await docker.listContainers({ all: false });
@@ -42,12 +56,12 @@ export async function POST(request: Request) {
         action: "restarted all containers",
       });
 
-      return Response.json({ success: true, affected: running.length });
+      return jsonResponse(request, { success: true, affected: running.length });
     }
 
     if (action === "cleanup_stopped") {
       if (session.user.role !== "ADMIN") {
-        return new Response("Forbidden - Admin only", { status: 403 });
+        return textResponse(request, "Forbidden - Admin only", { status: 403 });
       }
 
       const allContainers = await docker.listContainers({ all: true });
@@ -71,12 +85,12 @@ export async function POST(request: Request) {
         action: "cleaned up stopped containers",
       });
 
-      return Response.json({ success: true, affected: stopped.length });
+      return jsonResponse(request, { success: true, affected: stopped.length });
     }
 
-    return new Response("Invalid bulk action", { status: 400 });
+    return textResponse(request, "Invalid bulk action", { status: 400 });
   } catch (err) {
     console.error(err);
-    return new Response("Bulk action error", { status: 500 });
+    return textResponse(request, "Bulk action error", { status: 500 });
   }
 }

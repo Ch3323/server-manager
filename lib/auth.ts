@@ -5,8 +5,15 @@ import bcrypt from "bcrypt";
 import type { JWT } from "next-auth/jwt";
 import type { Session, User } from "next-auth";
 import type { AuthOptions } from "next-auth";
+import { z } from "zod";
+
+const credentialsSchema = z.object({
+  email: z.email().transform((value) => value.trim().toLowerCase()),
+  password: z.string().min(8).max(128),
+});
 
 export const authOptions: AuthOptions = {
+  secret: process.env.NEXTAUTH_SECRET,
   session: { strategy: "jwt" },
 
   providers: [
@@ -18,20 +25,21 @@ export const authOptions: AuthOptions = {
       },
 
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
+        const parsedCredentials = credentialsSchema.safeParse(credentials);
+
+        if (!parsedCredentials.success) {
           return null;
         }
 
+        const { email, password } = parsedCredentials.data;
+
         const user = await prisma.user.findUnique({
-          where: { email: credentials.email as string },
+          where: { email },
         });
 
         if (!user) return null;
 
-        const isValid = await bcrypt.compare(
-          credentials.password as string,
-          user.password
-        );
+        const isValid = await bcrypt.compare(password, user.password);
 
         if (!isValid) return null;
 

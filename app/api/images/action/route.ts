@@ -1,7 +1,11 @@
-import { getSession } from "@/lib/getSession";
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
-import { hasPermission } from "@/lib/rbac";
+import {
+  buildOptionsResponse,
+  jsonResponse,
+  requireApiSession,
+  textResponse,
+} from "@/lib/api-security";
 
 type ImageAction = "pull" | "tag" | "remove";
 
@@ -48,15 +52,20 @@ function pullImage(imageRef: string) {
 }
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD"],
+    rateLimit: {
+      key: "image-action",
+      limit: 30,
+      windowMs: 60_000,
+    },
+  });
 
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
+  if (auth instanceof Response) {
+    return auth;
   }
 
-  if (!hasPermission(session.user.role, ["ADMIN", "MOD"])) {
-    return new Response("Forbidden - MOD or ADMIN only", { status: 403 });
-  }
+  const { session } = auth;
 
   try {
     const body = await request.json();
@@ -65,7 +74,7 @@ export async function POST(request: Request) {
     if (action === "pull") {
       const imageRef = body?.imageRef as string | undefined;
       if (!imageRef || typeof imageRef !== "string") {
-        return new Response("imageRef required", { status: 400 });
+        return textResponse(request, "imageRef required", { status: 400 });
       }
 
       await recordActivity({
@@ -82,12 +91,12 @@ export async function POST(request: Request) {
         action: `pulled image ${imageRef}`,
       });
 
-      return Response.json({ success: true });
+      return jsonResponse(request, { success: true });
     }
 
     const imageId = body?.imageId as string | undefined;
     if (!imageId || typeof imageId !== "string") {
-      return new Response("imageId required", { status: 400 });
+      return textResponse(request, "imageId required", { status: 400 });
     }
 
     const image = docker.getImage(imageId);
@@ -98,7 +107,7 @@ export async function POST(request: Request) {
       const repo = body?.repo as string | undefined;
       const tag = body?.tag as string | undefined;
       if (!repo || !tag) {
-        return new Response("repo and tag required", { status: 400 });
+        return textResponse(request, "repo and tag required", { status: 400 });
       }
 
       await recordActivity({
@@ -115,12 +124,12 @@ export async function POST(request: Request) {
         action: `tagged image ${imageLabel} as ${repo}:${tag}`,
       });
 
-      return Response.json({ success: true });
+      return jsonResponse(request, { success: true });
     }
 
     if (action === "remove") {
       if (session.user.role !== "ADMIN") {
-        return new Response("Forbidden - Admin only", { status: 403 });
+        return textResponse(request, "Forbidden - Admin only", { status: 403 });
       }
 
       await recordActivity({
@@ -137,12 +146,16 @@ export async function POST(request: Request) {
         action: `deleted image ${imageLabel}`,
       });
 
-      return Response.json({ success: true });
+      return jsonResponse(request, { success: true });
     }
 
-    return new Response("Invalid image action", { status: 400 });
+    return textResponse(request, "Invalid image action", { status: 400 });
   } catch (err) {
     console.error(err);
-    return new Response("Docker image action error", { status: 500 });
+    return textResponse(request, "Docker image action error", { status: 500 });
   }
+}
+
+export function OPTIONS(request: Request) {
+  return buildOptionsResponse(request);
 }
