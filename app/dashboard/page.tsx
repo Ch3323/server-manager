@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import { showErrorToast, showSuccessToast } from '@/lib/client-notify';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
@@ -38,7 +39,14 @@ interface Container {
 
 interface SystemInfo {
     cpu: { usage: number; cores: number };
-    memory: { total: number; used: number; free: number; usedPercent: number };
+    memory: {
+        total: number;
+        used: number;
+        free: number;
+        available: number;
+        buffCache: number;
+        usedPercent: number;
+    };
     disk: { mount: string; size: number; used: number; available: number; usedPercent: number }[];
     uptime: number;
     processes: {
@@ -93,9 +101,7 @@ export default function DashboardPage() {
     const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
     const [activities, setActivities] = useState<ActivityLog[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
     const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null);
-    const [quickActionMessage, setQuickActionMessage] = useState<string | null>(null);
     const [pendingQuickAction, setPendingQuickAction] = useState<QuickActionType | null>(null);
     const [imageOptions, setImageOptions] = useState<ImageOption[]>([]);
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -137,9 +143,8 @@ export default function DashboardPage() {
                 const failures = [containersRes, systemRes, activityRes, imagesRes].filter(isAxiosRejected);
                 if (failures.length > 0) {
                     const failedTargets = failures.map((failure) => getFailedLabel(failure.reason));
-                    setError(`Some dashboard sections could not be loaded: ${failedTargets.join(', ')}`);
-                } else {
-                    setError(null);
+                    const message = `Some dashboard sections could not be loaded: ${failedTargets.join(', ')}`;
+                    showErrorToast(new Error(message), message);
                 }
             } finally {
                 setIsLoading(false);
@@ -215,22 +220,23 @@ export default function DashboardPage() {
 
     async function handleQuickAction(action: QuickActionType) {
         setQuickActionLoading(action);
-        setQuickActionMessage(null);
 
         try {
             const res = await axios.post('/api/containers/bulk', { action });
 
             const affected = res.data.affected ?? 0;
             if (action === 'restart_all') {
-                setQuickActionMessage(`Restarted ${affected} running container(s)`);
+                const message = `Restarted ${affected} running container(s)`;
+                showSuccessToast(message);
             } else {
-                setQuickActionMessage(`Cleaned up ${affected} stopped container(s)`);
+                const message = `Cleaned up ${affected} stopped container(s)`;
+                showSuccessToast(message);
             }
 
             await reloadDashboardData();
         } catch (err) {
             console.error(err);
-            setQuickActionMessage('Quick action failed');
+            showErrorToast(err, 'Quick action failed');
         } finally {
             setQuickActionLoading(null);
         }
@@ -240,7 +246,6 @@ export default function DashboardPage() {
         if (!createImageRef) return;
 
         setIsCreatingContainer(true);
-        setQuickActionMessage(null);
 
         try {
             const res = await axios.post('/api/containers/create', {
@@ -250,13 +255,14 @@ export default function DashboardPage() {
             });
 
             const createdName = res.data?.name ?? 'container';
-            setQuickActionMessage(`Created ${createdName}${startAfterCreate ? ' and started it' : ''}`);
+            const message = `Created ${createdName}${startAfterCreate ? ' and started it' : ''}`;
+            showSuccessToast(message);
             setCreateDialogOpen(false);
             setCreateContainerName('');
             await reloadDashboardData();
         } catch (err) {
             console.error(err);
-            setQuickActionMessage('Create container failed');
+            showErrorToast(err, 'Create container failed');
         } finally {
             setIsCreatingContainer(false);
         }
@@ -279,8 +285,6 @@ export default function DashboardPage() {
         pendingQuickAction === 'restart_all'
             ? `This will restart ${runningContainers} running container(s). Services may be briefly interrupted.`
             : `This will permanently remove ${stoppedContainers} stopped container(s). This action cannot be undone.`;
-    const cpuUsagePercent = systemInfo?.cpu.usage ?? 0;
-    const memoryUsagePercent = systemInfo?.memory.usedPercent ?? 0;
     const diskUsagePercent = systemInfo?.disk[0]?.usedPercent ?? 0;
 
     if (isLoading) {
@@ -359,6 +363,9 @@ export default function DashboardPage() {
                                 </div>
                                 <p className="text-xs text-muted-foreground">
                                     {formatBytes(systemInfo.memory.used)} / {formatBytes(systemInfo.memory.total)}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    {formatBytes(systemInfo.memory.available)} available
                                 </p>
                             </CardContent>
                         </Card>

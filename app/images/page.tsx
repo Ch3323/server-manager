@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import axios from "axios";
+import { showErrorToast, showSuccessToast } from "@/lib/client-notify";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,8 +66,6 @@ export default function ImagesPage() {
   const [images, setImages] = useState<ImageItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
@@ -88,14 +87,13 @@ export default function ImagesPage() {
 
   async function fetchImages(showSpinner = false) {
     if (showSpinner) setIsRefreshing(true);
-    setError(null);
 
     try {
       const res = await axios.get("/api/images/list");
       setImages(res.data ?? []);
     } catch (err) {
       console.error(err);
-      setError("Failed to load images");
+      showErrorToast(err, "Failed to load images");
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -146,8 +144,6 @@ export default function ImagesPage() {
 
   async function runImageAction(action: ImageAction, image: ImageItem, payload?: Record<string, unknown>) {
     setActionLoading({ imageId: image.id, action });
-    setError(null);
-    setMessage(null);
 
     try {
       await axios.post("/api/images/action", {
@@ -155,11 +151,12 @@ export default function ImagesPage() {
         imageId: image.id,
         ...payload,
       });
-      setMessage(`Action "${action}" completed for "${image.primaryTag}"`);
+      const message = `Action "${action}" completed for "${image.primaryTag}"`;
+      showSuccessToast(message);
       await fetchImages();
     } catch (err) {
       console.error(err);
-      setError(`Failed to ${action} "${image.primaryTag}"`);
+      showErrorToast(err, `Failed to ${action} "${image.primaryTag}"`);
     } finally {
       setActionLoading(null);
     }
@@ -167,20 +164,19 @@ export default function ImagesPage() {
 
   async function runPull() {
     setActionLoading({ imageId: "__pull__", action: "pull" });
-    setError(null);
-    setMessage(null);
 
     try {
       await axios.post("/api/images/action", {
         action: "pull",
         imageRef: pullImageRef.trim(),
       });
-      setMessage(`Pulled image "${pullImageRef.trim()}"`);
+      const message = `Pulled image "${pullImageRef.trim()}"`;
+      showSuccessToast(message);
       setPullImageRef("");
       await fetchImages();
     } catch (err) {
       console.error(err);
-      setError("Failed to pull image");
+      showErrorToast(err, "Failed to pull image");
     } finally {
       setActionLoading(null);
     }
@@ -188,8 +184,6 @@ export default function ImagesPage() {
 
   async function runPrune() {
     setBulkLoading(true);
-    setError(null);
-    setMessage(null);
     try {
       const res = await axios.post("/api/images/bulk", {
         action: "prune_dangling",
@@ -197,11 +191,12 @@ export default function ImagesPage() {
 
       const deletedImages = res.data?.deletedImages ?? 0;
       const reclaimedSpace = res.data?.reclaimedSpace ?? 0;
-      setMessage(`Pruned ${deletedImages} dangling image(s), reclaimed ${formatBytes(reclaimedSpace)}.`);
+      const message = `Pruned ${deletedImages} dangling image(s), reclaimed ${formatBytes(reclaimedSpace)}.`;
+      showSuccessToast(message);
       await fetchImages();
     } catch (err) {
       console.error(err);
-      setError("Failed to prune dangling images");
+      showErrorToast(err, "Failed to prune dangling images");
     } finally {
       setBulkLoading(false);
     }

@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import Link from 'next/link';
 
+import { showErrorToast, showSuccessToast } from '@/lib/client-notify';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -52,14 +53,19 @@ export default function LoginPage() {
       });
 
       if (!result?.ok) {
-        setError('Invalid email or password');
+        const message = 'Invalid email or password';
+        setError(message);
+        showErrorToast(new Error(message), message);
         return;
       }
 
+      showSuccessToast('Logged in successfully');
       router.push('/');
       router.refresh();
     } catch (err) {
-      setError('Something went wrong. Please try again.');
+      const message = 'Something went wrong. Please try again.';
+      setError(message);
+      showErrorToast(err, message);
       console.error(err);
     } finally {
       setIsLoading(false);

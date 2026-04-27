@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import axios from "axios";
+import { showErrorToast, showSuccessToast } from "@/lib/client-notify";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ interface ContainerItem {
   image: string;
   state: string;
   status: string;
+  isProtected: boolean;
 }
 
 interface ImageOption {
@@ -53,8 +55,6 @@ export default function ContainersPage() {
   const [containers, setContainers] = useState<ContainerItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
@@ -87,14 +87,13 @@ export default function ContainersPage() {
 
   async function fetchContainers(showSpinner = false) {
     if (showSpinner) setIsRefreshing(true);
-    setError(null);
 
     try {
       const res = await axios.get("/api/containers/list");
       setContainers(res.data ?? []);
     } catch (err) {
       console.error(err);
-      setError("Failed to load containers");
+      showErrorToast(err, "Failed to load containers");
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -122,7 +121,7 @@ export default function ContainersPage() {
           })
           .catch((err) => {
             console.error(err);
-            setError("Failed to load images for container creation");
+            showErrorToast(err, "Failed to load images for container creation");
           })
           .finally(() => {
             setIsLoadingImageOptions(false);
@@ -136,7 +135,8 @@ export default function ContainersPage() {
   const stats = useMemo(() => {
     const running = containers.filter((item) => item.state === "running").length;
     const stopped = containers.filter((item) => item.state !== "running").length;
-    return { total: containers.length, running, stopped };
+    const restartableRunning = containers.filter((item) => item.state === "running" && !item.isProtected).length;
+    return { total: containers.length, running, stopped, restartableRunning };
   }, [containers]);
 
   const filteredContainers = useMemo(() => {
@@ -186,7 +186,7 @@ export default function ContainersPage() {
       setLogs(res.data.logs ?? "");
     } catch (err) {
       console.error(err);
-      setLogsError("Failed to load logs");
+      setLogsError(showErrorToast(err, "Failed to load logs"));
     } finally {
       setIsLogsLoading(false);
     }
@@ -194,8 +194,6 @@ export default function ContainersPage() {
 
   async function runContainerAction(action: ContainerAction, target: ContainerItem, payload?: Record<string, unknown>) {
     setActionLoading({ containerId: target.id, action });
-    setMessage(null);
-    setError(null);
 
     try {
       await axios.post("/api/containers/action", {
@@ -203,11 +201,12 @@ export default function ContainersPage() {
         action,
         ...payload,
       });
-      setMessage(`Action "${action}" completed for "${target.name}"`);
+      const message = `Action "${action}" completed for "${target.name}"`;
+      showSuccessToast(message);
       await fetchContainers();
     } catch (err) {
       console.error(err);
-      setError(`Failed to ${action} "${target.name}"`);
+      showErrorToast(err, `Failed to ${action} "${target.name}"`);
     } finally {
       setActionLoading(null);
     }
@@ -215,21 +214,21 @@ export default function ContainersPage() {
 
   async function runBulkAction(action: BulkAction) {
     setBulkLoading(action);
-    setMessage(null);
-    setError(null);
 
     try {
       const res = await axios.post("/api/containers/bulk", { action });
       const affected = res.data?.affected ?? 0;
       if (action === "restart_all") {
-        setMessage(`Restarted ${affected} running container(s)`);
+        const message = `Restarted ${affected} restartable running container(s)`;
+        showSuccessToast(message);
       } else {
-        setMessage(`Cleaned up ${affected} stopped container(s)`);
+        const message = `Cleaned up ${affected} stopped container(s)`;
+        showSuccessToast(message);
       }
       await fetchContainers();
     } catch (err) {
       console.error(err);
-      setError(`Bulk action "${action}" failed`);
+      showErrorToast(err, `Bulk action "${action}" failed`);
     } finally {
       setBulkLoading(null);
     }
@@ -238,8 +237,6 @@ export default function ContainersPage() {
   async function handleCreateContainer() {
     if (!createImageRef) return;
     setIsCreatingContainer(true);
-    setError(null);
-    setMessage(null);
 
     try {
       const res = await axios.post("/api/containers/create", {
@@ -249,13 +246,14 @@ export default function ContainersPage() {
       });
 
       const createdName = res.data?.name ?? "container";
-      setMessage(`Created ${createdName}${startAfterCreate ? " and started it" : ""}`);
+      const message = `Created ${createdName}${startAfterCreate ? " and started it" : ""}`;
+      showSuccessToast(message);
       setCreateDialogOpen(false);
       setCreateContainerName("");
       await fetchContainers();
     } catch (err) {
       console.error(err);
-      setError("Failed to create container");
+      showErrorToast(err, "Failed to create container");
     } finally {
       setIsCreatingContainer(false);
     }
@@ -312,10 +310,10 @@ export default function ContainersPage() {
             <CardContent className="flex flex-wrap gap-2">
               <Button
                 onClick={() => setPendingBulkAction("restart_all")}
-                disabled={bulkLoading === "restart_all" || stats.running === 0}
+                disabled={bulkLoading === "restart_all" || stats.restartableRunning === 0}
               >
                 {bulkLoading === "restart_all" ? <Spinner className="h-4 w-4 mr-2" /> : null}
-                Restart All Running
+                Restart All Restartable
               </Button>
               {isAdmin ? (
                 <Button
@@ -370,6 +368,7 @@ export default function ContainersPage() {
                 {filteredContainers.map((item) => {
                   const isRunning = item.state === "running";
                   const isBusy = actionLoading?.containerId === item.id;
+                  const isProtected = item.isProtected;
 
                   return (
                     <div key={item.id} className="rounded-lg border p-3">
@@ -379,6 +378,7 @@ export default function ContainersPage() {
                             <span className={`h-2 w-2 rounded-full ${getStateDotClass(item.state)}`} />
                             <p className="font-semibold truncate">{item.name}</p>
                             <Badge variant="outline">{item.state}</Badge>
+                            {isProtected ? <Badge variant="secondary">Protected</Badge> : null}
                           </div>
                           <p className="text-xs text-muted-foreground break-all">{item.id}</p>
                           <p className="text-sm text-muted-foreground">{item.image}</p>
@@ -402,7 +402,7 @@ export default function ContainersPage() {
                             </Button>
                           ) : null}
 
-                          {isModOrAdmin && isRunning ? (
+                          {isModOrAdmin && isRunning && !isProtected ? (
                             <>
                               <Button
                                 variant="outline"
@@ -425,23 +425,27 @@ export default function ContainersPage() {
 
                           {isAdmin ? (
                             <>
-                              <Button
-                                variant="secondary"
-                                onClick={() => {
-                                  setRenameTarget(item);
-                                  setRenameValue(item.name);
-                                }}
-                                disabled={isBusy}
-                              >
-                                Rename
-                              </Button>
-                              <Button
-                                variant="destructive"
-                                onClick={() => setPendingDelete(item)}
-                                disabled={isBusy}
-                              >
-                                Delete
-                              </Button>
+                              {!isProtected ? (
+                                <Button
+                                  variant="secondary"
+                                  onClick={() => {
+                                    setRenameTarget(item);
+                                    setRenameValue(item.name);
+                                  }}
+                                  disabled={isBusy}
+                                >
+                                  Rename
+                                </Button>
+                              ) : null}
+                              {!isProtected ? (
+                                <Button
+                                  variant="destructive"
+                                  onClick={() => setPendingDelete(item)}
+                                  disabled={isBusy}
+                                >
+                                  Delete
+                                </Button>
+                              ) : null}
                             </>
                           ) : null}
                         </div>
@@ -469,7 +473,7 @@ export default function ContainersPage() {
             </DialogTitle>
             <DialogDescription>
               {pendingBulkAction === "restart_all"
-                ? `This will restart ${stats.running} running container(s).`
+                ? `This will restart ${stats.restartableRunning} running container(s). Protected containers are skipped.`
                 : `This will permanently remove ${stats.stopped} stopped container(s).`}
             </DialogDescription>
           </DialogHeader>

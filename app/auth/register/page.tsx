@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import Link from 'next/link';
 
+import { showErrorToast, showSuccessToast } from '@/lib/client-notify';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -85,16 +86,21 @@ export default function RegisterPage() {
       const data = await parseApiResponse(response);
 
       if (!response.ok) {
-        setError(data.error || data.message || 'Registration failed. Please try again.');
+        const message = data.error || data.message || 'Registration failed. Please try again.';
+        setError(message);
+        showErrorToast(new Error(message), message);
         return;
       }
 
       setSuccess(true);
+      showSuccessToast('Account created successfully');
       setTimeout(() => {
         router.push('/auth/login');
       }, 2000);
     } catch (err) {
-      setError('Something went wrong. Please try again.');
+      const message = 'Something went wrong. Please try again.';
+      setError(message);
+      showErrorToast(err, message);
       console.error(err);
     } finally {
       setIsLoading(false);

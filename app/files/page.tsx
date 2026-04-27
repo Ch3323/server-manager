@@ -28,6 +28,7 @@ import {
     Upload,
 } from "lucide-react";
 
+import { showErrorToast, showSuccessToast } from "@/lib/client-notify";
 import { Badge } from "@/components/ui/badge";
 import {
     Breadcrumb,
@@ -211,8 +212,6 @@ export default function FilesPage() {
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [isLoadingList, setIsLoadingList] = useState(true);
     const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [message, setMessage] = useState<string | null>(null);
 
     const [search, setSearch] = useState("");
     const [filterMode, setFilterMode] = useState<FilterMode>("all");
@@ -321,7 +320,6 @@ export default function FilesPage() {
 
     async function loadDirectory(path: string) {
         setIsLoadingList(true);
-        setError(null);
 
         try {
             const res = await axios.get("/api/files/list", {
@@ -337,14 +335,14 @@ export default function FilesPage() {
         } catch (err) {
             if (axios.isAxiosError(err)) {
                 if (err.response?.status === 403) {
-                    setError("Access denied for this directory");
+                    showErrorToast(err, "Access denied for this directory");
                 } else if (err.response?.status === 404) {
-                    setError("Directory not found");
+                    showErrorToast(err, "Directory not found");
                 } else {
-                    setError("Failed to load directory");
+                    showErrorToast(err, "Failed to load directory");
                 }
             } else {
-                setError("Failed to load directory");
+                showErrorToast(err, "Failed to load directory");
             }
         } finally {
             setIsLoadingList(false);
@@ -378,7 +376,6 @@ export default function FilesPage() {
 
         setEditorDialogOpen(true);
         setIsLoadingFile(true);
-        setError(null);
 
         try {
             const res = await axios.get("/api/files/read", {
@@ -391,30 +388,31 @@ export default function FilesPage() {
             setInitialEditorContent(content);
         } catch (err) {
             console.error(err);
-            setError("Failed to open file");
+            showErrorToast(err, "Failed to open file");
         } finally {
             setIsLoadingFile(false);
         }
     }
 
-    async function saveCurrentFile() {
+    async function saveCurrentFile(nextContent?: string) {
         if (!editorFilePath) return;
 
+        const contentToSave = nextContent ?? editorContent;
+
         setIsSavingFile(true);
-        setError(null);
-        setMessage(null);
 
         try {
             await axios.post("/api/files/write", {
                 path: editorFilePath,
-                content: editorContent,
+                content: contentToSave,
             });
-            setInitialEditorContent(editorContent);
-            setMessage("File saved");
+            setEditorContent(contentToSave);
+            setInitialEditorContent(contentToSave);
+            showSuccessToast("File saved");
             await loadDirectory(currentPath);
         } catch (err) {
             console.error(err);
-            setError("Failed to save file");
+            showErrorToast(err, "Failed to save file");
         } finally {
             setIsSavingFile(false);
         }
@@ -434,7 +432,9 @@ export default function FilesPage() {
     ) {
         monacoEditorRef.current = editor;
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-            void saveCurrentFile();
+            const latestContent = editor.getValue();
+            setEditorContent(latestContent);
+            void saveCurrentFile(latestContent);
         });
     }
 
@@ -477,20 +477,17 @@ export default function FilesPage() {
         const nextPath = joinPath(directoryPath, getBaseName(fromPath));
         if (nextPath === fromPath) return;
 
-        setError(null);
-        setMessage(null);
-
         try {
             await axios.post("/api/files/rename", {
                 fromPath,
                 toPath: nextPath,
             });
             updateOpenEditorPathAfterMove(fromPath, nextPath);
-            setMessage("Moved successfully");
+            showSuccessToast("Moved successfully");
             await loadDirectory(currentPath);
         } catch (err) {
             console.error(err);
-            setError("Failed to move item");
+            showErrorToast(err, "Failed to move item");
         } finally {
             setDraggingEntryPath(null);
             setDragOverDirectoryPath(null);
@@ -561,8 +558,6 @@ export default function FilesPage() {
         if (uploadItems.length === 0) return;
 
         setIsUploading(true);
-        setError(null);
-        setMessage(null);
 
         const uploaded: string[] = [];
         const failed: string[] = [];
@@ -591,12 +586,16 @@ export default function FilesPage() {
         setIsDragOver(false);
 
         if (uploaded.length > 0 && failed.length === 0) {
-            setMessage(`Uploaded ${uploaded.length} file(s)`);
+            const message = `Uploaded ${uploaded.length} file(s)`;
+            showSuccessToast(message);
         } else if (uploaded.length > 0 && failed.length > 0) {
-            setMessage(`Uploaded ${uploaded.length} file(s), failed ${failed.length} file(s)`);
-            setError(`Failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`);
+            const message = `Uploaded ${uploaded.length} file(s), failed ${failed.length} file(s)`;
+            const errorMessage = `Failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`;
+            showSuccessToast(message);
+            showErrorToast(new Error(errorMessage), errorMessage);
         } else {
-            setError(`Upload failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`);
+            const message = `Upload failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`;
+            showErrorToast(new Error(message), message);
         }
 
         setIsUploading(false);
@@ -616,11 +615,12 @@ export default function FilesPage() {
 
             setCreateDialogOpen(false);
             setCreateName("");
-            setMessage(`${createType === "file" ? "File" : "Folder"} created`);
+            const message = `${createType === "file" ? "File" : "Folder"} created`;
+            showSuccessToast(message);
             await loadDirectory(currentPath);
         } catch (err) {
             console.error(err);
-            setError(`Failed to create ${createType}`);
+            showErrorToast(err, `Failed to create ${createType}`);
         }
     }
 
@@ -644,11 +644,11 @@ export default function FilesPage() {
 
             setRenameDialogOpen(false);
             setRenameTarget(null);
-            setMessage("Renamed successfully");
+            showSuccessToast("Renamed successfully");
             await loadDirectory(currentPath);
         } catch (err) {
             console.error(err);
-            setError("Failed to rename");
+            showErrorToast(err, "Failed to rename");
         }
     }
 
@@ -668,11 +668,11 @@ export default function FilesPage() {
 
             setDeleteDialogOpen(false);
             setDeleteTarget(null);
-            setMessage("Deleted successfully");
+            showSuccessToast("Deleted successfully");
             await loadDirectory(currentPath);
         } catch (err) {
             console.error(err);
-            setError("Failed to delete");
+            showErrorToast(err, "Failed to delete");
         }
     }
 

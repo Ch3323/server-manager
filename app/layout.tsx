@@ -4,6 +4,7 @@ import Providers from "@/components/session-provider";
 
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
+import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
   title: "Server Manager",
@@ -29,6 +30,7 @@ export default function RootLayout({
             enableSystem
             disableTransitionOnChange
           >
+            <Toaster />
             <AppShell>
               {children}
             </AppShell>

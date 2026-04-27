@@ -1,4 +1,5 @@
 import { docker } from "@/lib/docker";
+import { isProtectedContainerName, normalizeContainerName } from "@/lib/protected-containers";
 import {
   buildOptionsResponse,
   jsonResponse,
@@ -26,10 +27,11 @@ export async function GET(request: Request) {
 
     const result = containers.map((c) => ({
       id: c.Id,
-      name: c.Names[0]?.replace("/", ""),
+      name: normalizeContainerName(c.Names[0]),
       image: c.Image,
       state: c.State,
       status: c.Status,
+      isProtected: isProtectedContainerName(c.Names[0]),
     }));
 
     return jsonResponse(request, result);

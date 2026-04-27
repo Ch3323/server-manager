@@ -1,6 +1,7 @@
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
 import { hasPermission } from "@/lib/rbac";
+import { isProtectedContainerName } from "@/lib/protected-containers";
 import {
   buildOptionsResponse,
   jsonResponse,
@@ -37,6 +38,7 @@ export async function POST(request: Request) {
       }
 
       const running = await docker.listContainers({ all: false });
+      const restartable = running.filter((item) => !item.Names.some((name) => isProtectedContainerName(name)));
       await recordActivity({
         actorEmail: session.user.email,
         actorRole: session.user.role,
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
       });
 
       await Promise.all(
-        running.map(async (item) => {
+        restartable.map(async (item) => {
           const container = docker.getContainer(item.Id);
           await container.restart();
         })
@@ -56,7 +58,7 @@ export async function POST(request: Request) {
         action: "restarted all containers",
       });
 
-      return jsonResponse(request, { success: true, affected: running.length });
+      return jsonResponse(request, { success: true, affected: restartable.length });
     }
 
     if (action === "cleanup_stopped") {

@@ -43,7 +43,8 @@ npm run dev
 - If you set `FILE_MANAGER_ROOT="/"`, the app can browse the full filesystem.
 - Write-like actions are blocked inside protected paths from `FILE_MANAGER_PROTECTED_PATHS`.
 - Linux defaults for protected paths are `/etc`, `/boot`, `/proc`, `/sys`, and `/dev`.
-- The live terminal now starts in the project root by default.
+- The live terminal uses xterm.js in the browser and Socket.IO + node-pty in
+  the same Node.js server process as the app.
 - Docker on Ubuntu uses `/var/run/docker.sock` automatically.
 - If the app cannot access Docker, add your user to the `docker` group or run the app with permission to access the Docker socket.
 
@@ -65,7 +66,7 @@ newgrp docker
 - `FILE_MANAGER_PROTECTED_PATHS`: optional comma-separated list of paths that cannot be edited, created in, renamed, or deleted
 - `TERMINAL_ROOT_PATH`: optional starting directory for terminal sessions
 - `TERMINAL_SHELL`: optional shell override
-- `TERMINAL_WS_HOST`: optional websocket bind host for the live terminal
+- `TERMINAL_SOCKET_PATH`: optional Socket.IO path for terminal sessions; defaults to `/socket.io`
 - `DOCKER_HOST`: optional Docker host such as `tcp://127.0.0.1:2375` or `unix:///var/run/docker.sock`
 - `DOCKER_SOCKET_PATH`: optional Unix socket override
 
@@ -110,7 +111,8 @@ docker compose logs -f app
 
 Good to know:
 
-- The app container uses Next.js `output: "standalone"` for a smaller runtime image.
+- The app uses a custom Node.js server so Socket.IO and Next.js share one port.
 - On Ubuntu, the app container mounts `/var/run/docker.sock` so it can manage the host Docker Engine.
-- The file manager and terminal are intentionally limited to `/home/nxdus` from the Ubuntu host by default.
+- The file manager is intentionally limited to `/home/nxdus` from the Ubuntu host by default.
+- The live terminal is a real shell inside the app runtime with access to mounted paths; only expose it to trusted admins.
 - Put nginx or Caddy in front of port `3000` before exposing this publicly.

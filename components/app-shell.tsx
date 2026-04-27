@@ -6,7 +6,6 @@ import { Suspense, useMemo } from "react";
 
 import { AppSidebar } from "@/components/sidebar/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "./ui/tooltip";
 import { SectionNavBar } from "./sidebar/section-navbar";
 
@@ -46,7 +45,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </main>
                 </Suspense>
             </SidebarProvider>
-            <Toaster />
         </TooltipProvider>
     );
 }

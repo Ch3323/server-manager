@@ -54,11 +54,27 @@ function getRequestOrigin(request: Request) {
   return new URL(request.url).origin;
 }
 
+function getRequestHostOrigins(request: Request) {
+  const host = request.headers.get("host")?.trim();
+  if (!host) return [];
+
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const protocols = new Set(["http", "https"]);
+
+  if (forwardedProto) {
+    protocols.add(forwardedProto);
+  }
+
+  return Array.from(protocols).map((protocol) => `${protocol}://${host}`);
+}
+
 export function isTrustedOrigin(request: Request, origin: string) {
   const normalizedOrigin = origin.trim().replace(/\/+$/, "");
-  const requestOrigin = getRequestOrigin(request).replace(/\/+$/, "");
+  const requestOrigins = [getRequestOrigin(request), ...getRequestHostOrigins(request)].map((value) =>
+    value.replace(/\/+$/, "")
+  );
 
-  if (normalizedOrigin === requestOrigin) {
+  if (requestOrigins.includes(normalizedOrigin)) {
     return true;
   }
 

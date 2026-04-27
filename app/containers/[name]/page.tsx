@@ -10,6 +10,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
 
 import axios from 'axios';
+import { showErrorToast, showSuccessToast } from '@/lib/client-notify';
 
 interface ContainerListItem {
     id: string;
@@ -17,6 +18,7 @@ interface ContainerListItem {
     image: string;
     state: string;
     status: string;
+    isProtected: boolean;
 }
 
 export default function ContainerDetailPage() {
@@ -34,6 +36,7 @@ export default function ContainerDetailPage() {
     const containerId = params.name as string;
     const isAdmin = session?.user?.role === 'ADMIN';
     const isModOrAdmin = session?.user?.role === 'ADMIN' || session?.user?.role === 'MOD';
+    const isProtected = container?.isProtected ?? false;
 
     async function fetchLogs(targetContainerId: string) {
         setIsLogsLoading(true);
@@ -49,7 +52,7 @@ export default function ContainerDetailPage() {
             setLogs(res.data.logs ?? '');
         } catch (err) {
             console.error(err);
-            setLogsError('Failed to load container logs');
+            setLogsError(showErrorToast(err, 'Failed to load container logs'));
         } finally {
             setIsLogsLoading(false);
         }
@@ -72,10 +75,12 @@ export default function ContainerDetailPage() {
                     setContainer(found);
                     await fetchLogs(found.id);
                 } else {
-                    setError('Container not found');
+                    const message = 'Container not found';
+                    setError(message);
+                    showErrorToast(new Error(message), message);
                 }
             } catch (err) {
-                setError('Failed to load container');
+                setError(showErrorToast(err, 'Failed to load container'));
                 console.error(err);
             } finally {
                 setIsLoading(false);
@@ -94,6 +99,7 @@ export default function ContainerDetailPage() {
             });
 
             if (res.status === 200) {
+                showSuccessToast(`Container ${action} completed`);
                 // Refresh container data
                 const refreshRes = await axios.get('/api/containers/list');
                 const containers = refreshRes.data as ContainerListItem[];
@@ -107,7 +113,7 @@ export default function ContainerDetailPage() {
             }
         } catch (err) {
             console.error(`Failed to ${action} container:`, err);
-            setError(`Failed to ${action} container`);
+            setError(showErrorToast(err, `Failed to ${action} container`));
         } finally {
             setActionLoading(null);
         }
@@ -169,6 +175,7 @@ export default function ContainerDetailPage() {
                                     <div className="flex items-center gap-3">
                                         <span className={`w-3 h-3 rounded-full ${getStateColor(container.state)}`}></span>
                                         <CardTitle className="text-2xl">{container.name}</CardTitle>
+                                        {container.isProtected && <Badge variant="secondary">Protected</Badge>}
                                     </div>
                                     <Badge className={`select-none text-white py-1 ${container.state == "running" ? "bg-green-500 hover:bg-green-500" : "bg-red-500 hover:bg-red-500"}`}>
                                         {container.state[0].toUpperCase() + container.state.slice(1)}
@@ -187,7 +194,7 @@ export default function ContainerDetailPage() {
                                             Start
                                         </Button>
                                     )}
-                                    {isModOrAdmin && container.state === 'running' && (
+                                    {isModOrAdmin && container.state === 'running' && !isProtected && (
                                         <>
                                             <Button
                                                 variant="outline"
@@ -207,7 +214,7 @@ export default function ContainerDetailPage() {
                                             </Button>
                                         </>
                                     )}
-                                    {isAdmin && (
+                                    {isAdmin && !isProtected && (
                                         <Button
                                             variant="destructive"
                                             onClick={() => handleAction('remove')}

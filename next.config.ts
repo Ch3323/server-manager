@@ -1,8 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
-  serverExternalPackages: ["ws"],
+  serverExternalPackages: ["dockerode", "docker-modem", "ssh2", "node-pty"],
   async headers() {
     return [
       {

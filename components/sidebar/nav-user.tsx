@@ -38,6 +38,8 @@ export function NavUserSkeleton() {
   )
 }
 
+type Role = "USER" | "MOD" | "ADMIN";
+
 export function NavUser({
   user,
 }: {
@@ -50,13 +52,27 @@ export function NavUser({
   const router = useRouter();
   const { isMobile } = useSidebar()
 
-  const roleCapitalize = user.role[0].toUpperCase() + user.role.slice(1).toLowerCase();
-
   const handleSignOut = async () => {
     await signOut()
-    router.replace("/sign-in")
+    router.replace("/auth/login")
     router.refresh()
   }
+
+  function getDisplayRole(role: Role) {
+    switch (role) {
+      case "USER":
+        return "user";
+      case "MOD":
+        return "moderator";
+      case "ADMIN":
+        return "admin";
+      default:
+        return "unknown";
+    }
+  }
+
+  const displayRole = getDisplayRole(user.role);
+  const roleCapitalize = displayRole[0].toUpperCase() + displayRole.slice(1).toLowerCase();
 
   return (
     <SidebarMenu>

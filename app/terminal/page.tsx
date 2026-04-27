@@ -1,182 +1,219 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RefreshCcw, TerminalIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import axios from "axios";
+import type { Socket } from "socket.io-client";
+import { showErrorToast, showInfoToast, showSuccessToast } from "@/lib/client-notify";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 
-type OutputKind = "command" | "stdout" | "stderr" | "meta";
+type TerminalCtor = typeof import("@xterm/xterm").Terminal;
+type TerminalInstance = import("@xterm/xterm").Terminal;
+type FitAddonInstance = import("@xterm/addon-fit").FitAddon;
 
-type OutputBlock = {
-  id: string;
-  kind: OutputKind;
-  text: string;
+type TerminalReadyEvent = {
+  cwd?: string;
+  pid?: number;
+  actorEmail?: string;
 };
 
-type WsEvent =
-  | { type: "ready"; cwd?: string; pid?: number }
-  | { type: "cwd"; cwd?: string }
-  | { type: "stdout"; data?: string }
-  | { type: "stderr"; data?: string }
-  | { type: "exit"; code?: number | null; signal?: string | null }
-  | { type: "pong" };
-
-type TicketResponse = {
-  wsUrl: string;
-  cwd: string;
-  expiresInMs: number;
+type TerminalExitEvent = {
+  code?: number | null;
+  signal?: string | null;
 };
 
-const MAX_BLOCKS = 2500;
-
-function makeBlock(kind: OutputKind, text: string): OutputBlock {
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-    kind,
-    text,
-  };
-}
-
-function getControlCharacter(key: string) {
-  if (key.length !== 1) return null;
-
-  const upper = key.toUpperCase();
-  if (upper >= "A" && upper <= "Z") {
-    return String.fromCharCode(upper.charCodeAt(0) - 64);
-  }
-
-  if (key === "2" || key === "@") return "\u0000";
-  if (key === "6" || key === "^") return "\u001e";
-  if (key === "-" || key === "_") return "\u001f";
-  return null;
-}
-
-function sanitizeTerminalOutput(value: string) {
-  const withoutAnsi = value
-    // CSI sequences: ESC [ ... command
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    // OSC sequences: ESC ] ... BEL or ESC \
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
-    // Single-char escape sequences
-    .replace(/\u001b[@-_]/g, "");
-
-  return withoutAnsi.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+function sendResize(socket: Socket | null, terminal: TerminalInstance | null) {
+  if (!socket?.connected || !terminal) return;
+  socket.emit("terminal:resize", {
+    cols: terminal.cols,
+    rows: terminal.rows,
+  });
 }
 
 export default function TerminalPage() {
   const router = useRouter();
   const { data: session, status } = useSession();
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const outputRef = useRef<HTMLDivElement | null>(null);
+  const terminalHostRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<TerminalInstance | null>(null);
+  const fitAddonRef = useRef<FitAddonInstance | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const hasInitializedTerminalRef = useRef(false);
   const hasInitializedConnectionRef = useRef(false);
 
-  const [cwd, setCwd] = useState("");
-  const [input, setInput] = useState("");
-  const [blocks, setBlocks] = useState<OutputBlock[]>([
-    makeBlock("meta", "Live terminal ready. Creating secure session..."),
-  ]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [statusText, setStatusText] = useState("Preparing terminal");
+  const [isTerminalReady, setIsTerminalReady] = useState(false);
 
   const isAdmin = session?.user?.role === "ADMIN";
 
-  const appendBlock = useCallback((kind: OutputKind, text: string) => {
-    if (!text) return;
-    setBlocks((prev) => {
-      const next = [...prev, makeBlock(kind, text)];
-      if (next.length > MAX_BLOCKS) {
-        return next.slice(next.length - MAX_BLOCKS);
-      }
-      return next;
-    });
+  const closeSocket = useCallback(() => {
+    const current = socketRef.current;
+    socketRef.current = null;
+    if (!current) return;
+    current.removeAllListeners();
+    current.disconnect();
   }, []);
 
-  const closeSocket = useCallback(() => {
-    const current = wsRef.current;
-    wsRef.current = null;
-    if (!current) return;
+  const fitTerminal = useCallback(() => {
     try {
-      current.close();
+      fitAddonRef.current?.fit();
+      sendResize(socketRef.current, terminalRef.current);
     } catch {
-      // no-op
+      // The terminal can briefly be detached during route transitions.
     }
   }, []);
 
   const connectSocket = useCallback(async () => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
     setIsConnecting(true);
     setIsConnected(false);
-
+    setStatusText("Connecting");
     closeSocket();
 
+    terminal.reset();
+    terminal.writeln("Connecting to host terminal...");
+
     try {
-      const ticketRes = await axios.post<TicketResponse>("/api/terminal/ws-ticket");
-      setCwd(ticketRes.data.cwd);
+      const { io } = await import("socket.io-client");
+      const socket = io({
+        path: process.env.NEXT_PUBLIC_TERMINAL_SOCKET_PATH || "/socket.io",
+        transports: ["websocket"],
+        withCredentials: true,
+        reconnection: false,
+      });
 
-      const ws = new WebSocket(ticketRes.data.wsUrl);
-      wsRef.current = ws;
+      socketRef.current = socket;
 
-      ws.onopen = () => {
+      socket.on("connect", () => {
         setIsConnected(true);
         setIsConnecting(false);
-        appendBlock("meta", `Connected to server terminal (${ticketRes.data.cwd})`);
-      };
+        setStatusText("Connected");
+        showSuccessToast("Connected to host terminal");
+        terminal.focus();
+        fitTerminal();
+      });
 
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data as string) as WsEvent;
-          if (payload.type === "ready") {
-            if (payload.cwd) setCwd(payload.cwd);
-            appendBlock("meta", `Shell started${payload.pid ? ` (pid ${payload.pid})` : ""}`);
-            return;
-          }
+      socket.on("terminal:ready", (payload: TerminalReadyEvent) => {
+        terminal.writeln(
+          `\x1b[90mConnected to host shell${payload.pid ? ` (pid ${payload.pid})` : ""}\x1b[0m`
+        );
+        sendResize(socket, terminal);
+      });
 
-          if (payload.type === "cwd") {
-            if (payload.cwd) setCwd(payload.cwd);
-            return;
-          }
-
-          if (payload.type === "stdout" && payload.data) {
-            appendBlock("stdout", sanitizeTerminalOutput(payload.data));
-            return;
-          }
-
-          if (payload.type === "stderr" && payload.data) {
-            appendBlock("stderr", sanitizeTerminalOutput(payload.data));
-            return;
-          }
-
-          if (payload.type === "exit") {
-            appendBlock(
-              "meta",
-              `Shell exited (code: ${payload.code ?? "unknown"}${payload.signal ? `, signal: ${payload.signal}` : ""})`
-            );
-          }
-        } catch {
-          appendBlock("stderr", "Failed to parse server message");
+      socket.on("terminal:output", (data: unknown) => {
+        if (typeof data === "string") {
+          terminal.write(data);
         }
-      };
+      });
 
-      ws.onerror = () => {
-        appendBlock("stderr", "WebSocket connection error");
-      };
+      socket.on("terminal:error", (payload: { message?: string }) => {
+        const message = payload.message || "Terminal error";
+        terminal.writeln(`\r\n\x1b[31m${message}\x1b[0m`);
+        showErrorToast(new Error(message), message);
+      });
 
-      ws.onclose = () => {
+      socket.on("terminal:exit", (payload: TerminalExitEvent) => {
+        terminal.writeln(
+          `\r\n\x1b[90mShell exited (code: ${payload.code ?? "unknown"}${
+            payload.signal ? `, signal: ${payload.signal}` : ""
+          })\x1b[0m`
+        );
+      });
+
+      socket.on("connect_error", (error) => {
+        terminal.writeln(`\r\n\x1b[31mSocket.IO connection error: ${error.message}\x1b[0m`);
+        setStatusText("Connection failed");
+        setIsConnecting(false);
+        setIsConnected(false);
+        showErrorToast(error, "Socket.IO connection error");
+      });
+
+      socket.on("disconnect", () => {
         setIsConnected(false);
         setIsConnecting(false);
-        if (wsRef.current === ws) {
-          wsRef.current = null;
+        setStatusText("Disconnected");
+        if (socketRef.current === socket) {
+          socketRef.current = null;
         }
-        appendBlock("meta", "Disconnected from server terminal");
-      };
-    } catch (err) {
-      console.error(err);
-      appendBlock("stderr", "Failed to establish live terminal session");
+        terminal.writeln("\r\n\x1b[90mDisconnected from host terminal\x1b[0m");
+        showInfoToast("Disconnected from host terminal");
+      });
+    } catch (error) {
+      console.error(error);
+      terminal.writeln("\r\n\x1b[31mFailed to establish host terminal session\x1b[0m");
+      setStatusText("Connection failed");
       setIsConnecting(false);
       setIsConnected(false);
+      showErrorToast(error, "Failed to establish host terminal session");
     }
-  }, [appendBlock, closeSocket]);
+  }, [closeSocket, fitTerminal]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || !isAdmin) return;
+    if (hasInitializedTerminalRef.current || !terminalHostRef.current) return;
+    hasInitializedTerminalRef.current = true;
+
+    let resizeObserver: ResizeObserver | null = null;
+    let disposed = false;
+
+    void Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+    ]).then(([xtermModule, fitModule]) => {
+      if (disposed || !terminalHostRef.current) return;
+
+      const Terminal = xtermModule.Terminal as TerminalCtor;
+      const { FitAddon } = fitModule;
+      const terminal = new Terminal({
+        cursorBlink: true,
+        convertEol: false,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontSize: 13,
+        lineHeight: 1.2,
+        scrollback: 8000,
+        theme: {
+          background: "#050505",
+          foreground: "#f4f4f5",
+          cursor: "#fafafa",
+          selectionBackground: "#334155",
+        },
+      });
+      const fitAddon = new FitAddon();
+
+      terminal.loadAddon(fitAddon);
+      terminal.open(terminalHostRef.current);
+      terminalRef.current = terminal;
+      fitAddonRef.current = fitAddon;
+      setIsTerminalReady(true);
+
+      terminal.onData((data) => {
+        const socket = socketRef.current;
+        if (socket?.connected) {
+          socket.emit("terminal:input", data);
+        }
+      });
+
+      resizeObserver = new ResizeObserver(() => fitTerminal());
+      resizeObserver.observe(terminalHostRef.current);
+      fitTerminal();
+      terminal.focus();
+    });
+
+    return () => {
+      disposed = true;
+      resizeObserver?.disconnect();
+      terminalRef.current?.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+      setIsTerminalReady(false);
+    };
+  }, [fitTerminal, isAdmin, status]);
 
   useEffect(() => {
     return () => {
@@ -194,91 +231,17 @@ export default function TerminalPage() {
       router.push("/dashboard");
       return;
     }
-    if (hasInitializedConnectionRef.current) return;
+    if (hasInitializedConnectionRef.current || !isTerminalReady) return;
     hasInitializedConnectionRef.current = true;
 
     void connectSocket();
-  }, [connectSocket, isAdmin, router, status]);
-
-  useEffect(() => {
-    if (!outputRef.current) return;
-    outputRef.current.scrollTop = outputRef.current.scrollHeight;
-  }, [blocks, isConnected, isConnecting]);
-
-  function sendRawInput(raw: string) {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "input", data: raw }));
-  }
-
-  function sendSignal(signal: "SIGINT" | "SIGTERM" | "SIGKILL") {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "signal", data: signal }));
-  }
-
-  function submitInput() {
-    const command = input.trim();
-    if (!command) return;
-    const normalized = command.toLowerCase();
-    if (normalized === "clear" || normalized === "cls") {
-      setBlocks([]);
-      setInput("");
-      return;
-    }
-    if (normalized === "reconnect") {
-      void connectSocket();
-      setInput("");
-      return;
-    }
-    if (!isConnected) {
-      appendBlock("stderr", "Terminal is disconnected. Type 'reconnect' and press Enter.");
-      return;
-    }
-    appendBlock("command", `${cwd || "."}> ${command}\n`);
-    sendRawInput(`${command}\n`);
-    setInput("");
-  }
-
-  function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    const usesControlModifier = (event.ctrlKey || event.metaKey) && !event.altKey;
-    if (usesControlModifier) {
-      const controlChar = getControlCharacter(event.key);
-      if (controlChar) {
-        event.preventDefault();
-
-        if (!isConnected) {
-          appendBlock("stderr", "Terminal is disconnected. Type 'reconnect' and press Enter.");
-          return;
-        }
-
-        const normalizedKey = event.key.toLowerCase();
-        if (normalizedKey === "c") {
-          sendSignal("SIGINT");
-          appendBlock("meta", "^C");
-          return;
-        } else if (normalizedKey === "d") {
-          appendBlock("meta", "^D");
-        } else if (normalizedKey === "z") {
-          appendBlock("meta", "^Z");
-        }
-
-        sendRawInput(controlChar);
-        return;
-      }
-    }
-
-    if (event.key === "Enter") {
-      event.preventDefault();
-      submitInput();
-    }
-  }
+  }, [connectSocket, isAdmin, isTerminalReady, router, status]);
 
   if (status === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <Spinner className="h-8 w-8 mx-auto mb-4 text-muted-foreground" />
+          <Spinner className="mx-auto mb-4 h-8 w-8 text-muted-foreground" />
           <p className="text-muted-foreground">Loading terminal...</p>
         </div>
       </div>
@@ -288,41 +251,39 @@ export default function TerminalPage() {
   if (!session || !isAdmin) return null;
 
   return (
-    <div className="p-0">
-      <div className="h-[calc(100vh-4rem)] overflow-hidden border bg-black font-mono text-xs leading-5 md:text-sm">
-        <div ref={outputRef} className="h-[calc(100%-44px)] overflow-auto p-3">
-          <div className="space-y-1 whitespace-pre-wrap wrap-break-word">
-            {blocks.map((block) => (
-              <p
-                key={block.id}
-                className={
-                  block.kind === "command"
-                    ? "text-cyan-300"
-                    : block.kind === "stderr"
-                      ? "text-red-300"
-                      : block.kind === "meta"
-                        ? "text-zinc-400"
-                        : "text-zinc-100"
-                }
-              >
-                {block.text}
-              </p>
-            ))}
-          </div>
+    <div className="h-[calc(100vh-4rem)] overflow-hidden bg-black">
+      <div className="flex h-11 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-3 text-zinc-100">
+        <div className="flex min-w-0 items-center gap-2">
+          <TerminalIcon className="size-4 shrink-0 text-emerald-400" />
+          <span className="truncate text-sm font-medium">Host terminal</span>
+          <span className="text-xs text-zinc-500">{statusText}</span>
         </div>
-
-        <div className="flex h-11 items-center gap-2 border-t border-zinc-800 px-3 text-zinc-100">
-          <input
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={handleInputKeyDown}
-            placeholder={isConnecting ? "Connecting..." : isConnected ? "Type command..." : "Disconnected"}
-            className="w-full bg-transparent outline-none placeholder:text-zinc-500"
-            disabled={isConnecting}
-          />
+        <div className="flex items-center gap-2">
           {isConnecting ? <Spinner className="h-4 w-4 text-zinc-400" /> : null}
+          <span
+            className={
+              isConnected
+                ? "size-2 rounded-full bg-emerald-400"
+                : isConnecting
+                  ? "size-2 rounded-full bg-amber-400"
+                  : "size-2 rounded-full bg-zinc-600"
+            }
+            aria-label={isConnected ? "Connected" : isConnecting ? "Connecting" : "Disconnected"}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="text-zinc-200 hover:bg-zinc-800 hover:text-white"
+            onClick={() => void connectSocket()}
+            disabled={isConnecting}
+            title="Reconnect"
+          >
+            <RefreshCcw className="size-4" />
+          </Button>
         </div>
       </div>
+      <div ref={terminalHostRef} className="h-[calc(100%-44px)] w-full p-2" />
     </div>
   );
 }

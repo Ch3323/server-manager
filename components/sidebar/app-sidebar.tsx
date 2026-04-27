@@ -40,8 +40,23 @@ const navbarMenu = {
   ]
 }
 
+type Role = "USER" | "MOD" | "ADMIN";
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: session, status } = useSession();
+
+  function getDisplayRole(role: Role | undefined) {
+    switch (role) {
+      case "USER":
+        return "user";
+      case "MOD":
+        return "moderator";
+      case "ADMIN":
+        return "admin";
+      default:
+        return "";
+    }
+  }
 
   return (
     <Sidebar className="select-none" collapsible="icon" {...props}>
@@ -52,10 +67,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
-              <Image draggable={false} src={"/images/acs.svg"} alt="@ACS" width={128} height={128} className="w-16 dark:invert" />
+              <Image loading="eager" draggable={false} src={"/images/mascot.png"} alt="@ACS" width={128} height={128} className="w-14" style={{ objectFit: "cover" }} />
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">SERVER</span>
-                <span className="truncate text-xs text-muted-foreground">MANAGER</span>
+                <span className="truncate text-xs text-muted-foreground">{getDisplayRole(session?.user?.role).toUpperCase()}</span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>

@@ -1,5 +1,6 @@
 import { docker } from "@/lib/docker";
 import { recordActivity } from "@/lib/activity";
+import { isProtectedContainerName, normalizeContainerName } from "@/lib/protected-containers";
 import {
   buildOptionsResponse,
   jsonResponse,
@@ -31,7 +32,14 @@ export async function POST(request: Request) {
     const { containerId, action, newName } = await request.json();
     const container = docker.getContainer(containerId);
     const inspect = await container.inspect();
-    const containerName = inspect.Name?.replace("/", "") || containerId;
+    const containerName = normalizeContainerName(inspect.Name) || containerId;
+
+    if (
+      (action === "stop" || action === "restart" || action === "remove" || action === "rename") &&
+      isProtectedContainerName(containerName)
+    ) {
+      return textResponse(request, "This container is protected from stop, restart, delete, and rename", { status: 403 });
+    }
 
     switch (action) {
       case "start":

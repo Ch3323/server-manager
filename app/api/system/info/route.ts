@@ -29,6 +29,9 @@ export async function GET(request: Request) {
       si.time(),
     ]);
 
+    const realMemoryUsed = Math.max(0, mem.total - mem.free - mem.buffcache);
+    const realMemoryUsedPercent = mem.total > 0 ? (realMemoryUsed / mem.total) * 100 : 0;
+
     return jsonResponse(request, {
       cpu: {
         usage: load.currentLoad,
@@ -37,9 +40,11 @@ export async function GET(request: Request) {
       },
       memory: {
         total: mem.total,
-        used: mem.used,
+        used: realMemoryUsed,
         free: mem.free,
-        usedPercent: (mem.used / mem.total) * 100,
+        available: mem.available,
+        buffCache: mem.buffcache,
+        usedPercent: realMemoryUsedPercent,
       },
       disk: disk.map((d) => ({
         mount: d.mount,
