@@ -18,16 +18,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
 import { redirect } from 'next/navigation';
+import { ContainerCreateDialog } from '@/components/container-create-dialog';
 
 interface Container {
     id: string;
@@ -105,10 +97,6 @@ export default function DashboardPage() {
     const [pendingQuickAction, setPendingQuickAction] = useState<QuickActionType | null>(null);
     const [imageOptions, setImageOptions] = useState<ImageOption[]>([]);
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
-    const [createImageRef, setCreateImageRef] = useState('');
-    const [createContainerName, setCreateContainerName] = useState('');
-    const [startAfterCreate, setStartAfterCreate] = useState(true);
-    const [isCreatingContainer, setIsCreatingContainer] = useState(false);
 
     useEffect(() => {
         async function fetchData() {
@@ -135,9 +123,6 @@ export default function DashboardPage() {
                 if (imagesRes.status === 'fulfilled') {
                     const usableImages = (imagesRes.value.data as ImageOption[]).filter((img) => !img.isDangling);
                     setImageOptions(usableImages);
-                    if (usableImages.length > 0) {
-                        setCreateImageRef(usableImages[0].primaryTag);
-                    }
                 }
 
                 const failures = [containersRes, systemRes, activityRes, imagesRes].filter(isAxiosRejected);
@@ -212,9 +197,6 @@ export default function DashboardPage() {
         if (imagesRes.status === 'fulfilled') {
             const usableImages = (imagesRes.value.data as ImageOption[]).filter((img) => !img.isDangling);
             setImageOptions(usableImages);
-            if (usableImages.length > 0 && !usableImages.some((img) => img.primaryTag === createImageRef)) {
-                setCreateImageRef(usableImages[0].primaryTag);
-            }
         }
     }
 
@@ -239,32 +221,6 @@ export default function DashboardPage() {
             showErrorToast(err, 'Quick action failed');
         } finally {
             setQuickActionLoading(null);
-        }
-    }
-
-    async function handleCreateContainer() {
-        if (!createImageRef) return;
-
-        setIsCreatingContainer(true);
-
-        try {
-            const res = await axios.post('/api/containers/create', {
-                imageRef: createImageRef,
-                containerName: createContainerName.trim(),
-                startAfterCreate,
-            });
-
-            const createdName = res.data?.name ?? 'container';
-            const message = `Created ${createdName}${startAfterCreate ? ' and started it' : ''}`;
-            showSuccessToast(message);
-            setCreateDialogOpen(false);
-            setCreateContainerName('');
-            await reloadDashboardData();
-        } catch (err) {
-            console.error(err);
-            showErrorToast(err, 'Create container failed');
-        } finally {
-            setIsCreatingContainer(false);
         }
     }
 
@@ -442,7 +398,7 @@ export default function DashboardPage() {
                                         + Create container
                                     </Button>
                                 )}
-                                {isAdmin && (
+                                {(isAdmin || session?.user?.role === 'MOD') && (
                                     <Button
                                         variant="outline"
                                         onClick={() => redirect("/files")}
@@ -534,64 +490,12 @@ export default function DashboardPage() {
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-                <DialogContent showCloseButton={false}>
-                    <DialogHeader>
-                        <DialogTitle>Create Container</DialogTitle>
-                        <DialogDescription>
-                            Create a new container from a pulled image.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-3">
-                        <div className="space-y-1">
-                            <p className="text-sm font-medium">Image</p>
-                            <Select value={createImageRef} onValueChange={setCreateImageRef}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select image" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {imageOptions.map((img) => (
-                                        <SelectItem key={img.id} value={img.primaryTag}>
-                                            {img.primaryTag}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1">
-                            <p className="text-sm font-medium">Container Name (optional)</p>
-                            <Input
-                                value={createContainerName}
-                                onChange={(e) => setCreateContainerName(e.target.value)}
-                                placeholder="my-app-container"
-                            />
-                        </div>
-                        <label className="flex items-center gap-2 text-sm">
-                            <Checkbox
-                                checked={startAfterCreate}
-                                onCheckedChange={(checked) => setStartAfterCreate(checked === true)}
-                            />
-                            Start container immediately after create
-                        </label>
-                    </div>
-                    <DialogFooter>
-                        <Button
-                            variant="outline"
-                            onClick={() => setCreateDialogOpen(false)}
-                            disabled={isCreatingContainer}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            onClick={() => void handleCreateContainer()}
-                            disabled={isCreatingContainer || createImageRef.length === 0}
-                        >
-                            {isCreatingContainer ? <Spinner className="h-4 w-4 mr-2" /> : null}
-                            Create
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <ContainerCreateDialog
+                open={createDialogOpen}
+                onOpenChange={setCreateDialogOpen}
+                imageOptions={imageOptions}
+                onCreated={reloadDashboardData}
+            />
         </div>
     );
 }

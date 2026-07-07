@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 
@@ -21,6 +21,9 @@ interface ContainerListItem {
     isProtected: boolean;
 }
 
+const MAX_LOG_CHARS = 200_000;
+const LOG_BOTTOM_THRESHOLD_PX = 24;
+
 export default function ContainerDetailPage() {
     const params = useParams();
     const router = useRouter();
@@ -32,31 +35,15 @@ export default function ContainerDetailPage() {
     const [logs, setLogs] = useState('');
     const [isLogsLoading, setIsLogsLoading] = useState(false);
     const [logsError, setLogsError] = useState<string | null>(null);
+    const logsRef = useRef<HTMLPreElement | null>(null);
+    const shouldAutoScrollLogsRef = useRef(true);
+    const shouldForceInitialLogScrollRef = useRef(false);
 
     const containerId = params.name as string;
     const isAdmin = session?.user?.role === 'ADMIN';
     const isModOrAdmin = session?.user?.role === 'ADMIN' || session?.user?.role === 'MOD';
     const isProtected = container?.isProtected ?? false;
-
-    async function fetchLogs(targetContainerId: string) {
-        setIsLogsLoading(true);
-        setLogsError(null);
-
-        try {
-            const res = await axios.get('/api/containers/logs', {
-                params: {
-                    containerId: targetContainerId,
-                    tail: 200,
-                },
-            });
-            setLogs(res.data.logs ?? '');
-        } catch (err) {
-            console.error(err);
-            setLogsError(showErrorToast(err, 'Failed to load container logs'));
-        } finally {
-            setIsLogsLoading(false);
-        }
-    }
+    const isContainerRunning = container?.state === 'running';
 
     useEffect(() => {
         if (status === "loading") return;
@@ -72,8 +59,12 @@ export default function ContainerDetailPage() {
                 const found = containers.find((c) => c.id === containerId || c.name === containerId);
 
                 if (found) {
+                    shouldAutoScrollLogsRef.current = true;
+                    shouldForceInitialLogScrollRef.current = true;
+                    setLogs('');
+                    setLogsError(null);
+                    setIsLogsLoading(true);
                     setContainer(found);
-                    await fetchLogs(found.id);
                 } else {
                     const message = 'Container not found';
                     setError(message);
@@ -89,6 +80,108 @@ export default function ContainerDetailPage() {
 
         fetchContainer();
     }, [containerId, session, status, router]);
+
+    function scrollLogsToBottom() {
+        const logsElement = logsRef.current;
+        if (!logsElement) return;
+
+        logsElement.scrollTop = logsElement.scrollHeight;
+    }
+
+    function updateLogAutoScrollPreference() {
+        const logsElement = logsRef.current;
+        if (!logsElement) return;
+
+        const distanceFromBottom =
+            logsElement.scrollHeight - logsElement.scrollTop - logsElement.clientHeight;
+        shouldAutoScrollLogsRef.current = distanceFromBottom <= LOG_BOTTOM_THRESHOLD_PX;
+    }
+
+    useEffect(() => {
+        if (!container?.id || !session) return;
+
+        const params = new URLSearchParams({
+            containerId: container.id,
+            tail: "200",
+        });
+        const events = new EventSource(`/api/containers/logs?${params.toString()}`, {
+            withCredentials: true,
+        });
+        const shouldReconnect = container.state === 'running';
+        shouldAutoScrollLogsRef.current = true;
+        shouldForceInitialLogScrollRef.current = true;
+
+        events.onopen = () => {
+            setLogsError(null);
+            setIsLogsLoading(false);
+        };
+
+        events.addEventListener('ready', () => {
+            shouldAutoScrollLogsRef.current = true;
+            shouldForceInitialLogScrollRef.current = true;
+            setLogsError(null);
+            setIsLogsLoading(false);
+            requestAnimationFrame(scrollLogsToBottom);
+        });
+
+        events.addEventListener('log', (event) => {
+            setIsLogsLoading(false);
+            setLogsError(null);
+
+            try {
+                const payload = JSON.parse(event.data) as { chunk?: string };
+                if (payload.chunk) {
+                    setLogs((current) => (current + payload.chunk).slice(-MAX_LOG_CHARS));
+                }
+            } catch (err) {
+                console.error('Failed to parse container log event:', err);
+            }
+        });
+
+        events.addEventListener('log-error', (event) => {
+            setIsLogsLoading(false);
+
+            try {
+                const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+                setLogsError(payload.message ?? 'Container log stream error');
+            } catch {
+                setLogsError('Container log stream disconnected. Reconnecting...');
+            }
+        });
+
+        events.addEventListener('end', () => {
+            setIsLogsLoading(false);
+            if (!shouldReconnect) {
+                events.close();
+            }
+        });
+
+        events.onerror = () => {
+            setIsLogsLoading(false);
+            if (!shouldReconnect) {
+                events.close();
+                return;
+            }
+            setLogsError('Container log stream disconnected. Reconnecting...');
+        };
+
+        return () => {
+            events.close();
+        };
+    }, [container?.id, container?.state, session]);
+
+    useEffect(() => {
+        const logsElement = logsRef.current;
+        if (!logsElement) return;
+        if (!shouldAutoScrollLogsRef.current && !shouldForceInitialLogScrollRef.current) return;
+
+        requestAnimationFrame(() => {
+            logsElement.scrollTop = logsElement.scrollHeight;
+            if (logs.length > 0) {
+                shouldForceInitialLogScrollRef.current = false;
+            }
+        });
+    }, [logs]);
 
     async function handleAction(action: string) {
         setActionLoading(action);
@@ -106,7 +199,6 @@ export default function ContainerDetailPage() {
                 const found = containers.find((c) => c.id === containerId || c.name === containerId);
                 if (found) {
                     setContainer(found);
-                    await fetchLogs(found.id);
                 } else {
                     router.push("/dashboard");
                 }
@@ -254,15 +346,7 @@ export default function ContainerDetailPage() {
                             <Card>
                                 <CardHeader className="flex flex-row items-center justify-between">
                                     <CardTitle>Logs</CardTitle>
-                                    <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => container && fetchLogs(container.id)}
-                                        disabled={isLogsLoading}
-                                    >
-                                        {isLogsLoading ? <Spinner className="h-4 w-4 mr-2" /> : null}
-                                        Refresh Logs
-                                    </Button>
+                                    {isLogsLoading && isContainerRunning ? <Spinner className="h-4 w-4 text-muted-foreground" /> : null}
                                 </CardHeader>
                                 <CardContent>
                                     {logsError ? (
@@ -270,8 +354,12 @@ export default function ContainerDetailPage() {
                                             {logsError}
                                         </div>
                                     ) : null}
-                                    <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap break-words">
-                                        {logs || 'No logs found'}
+                                    <pre
+                                        ref={logsRef}
+                                        onScroll={updateLogAutoScrollPreference}
+                                        className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap break-words"
+                                    >
+                                        {logs || (isLogsLoading ? 'Connecting to log stream...' : 'No logs found')}
                                     </pre>
                                 </CardContent>
                             </Card>

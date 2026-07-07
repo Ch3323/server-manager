@@ -53,7 +53,7 @@ export default function LoginPage() {
       });
 
       if (!result?.ok) {
-        const message = 'Invalid email or password';
+        const message = 'Invalid email, password, or unverified email';
         setError(message);
         showErrorToast(new Error(message), message);
         return;
@@ -140,7 +140,16 @@ export default function LoginPage() {
             </form>
           </Form>
 
-          <div className="mt-4 text-center text-sm">
+          <div className="mt-2 text-right text-sm">
+            <Link
+              href="/auth/forgot-password"
+              className="text-primary hover:underline font-medium"
+            >
+              Forgot password?
+            </Link>
+          </div>
+
+          <div className="mt-3 text-center text-sm">
             <span className="text-muted-foreground">Don&apos;t have an account? </span>
             <Link
               href="/auth/register"

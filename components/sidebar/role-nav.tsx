@@ -1,6 +1,6 @@
 "use client"
 
-import { Folder, Terminal } from "lucide-react"
+import { Folder, Terminal, Users } from "lucide-react"
 
 import { NavMain } from "@/components/sidebar/nav-main"
 
@@ -10,14 +10,24 @@ type RoleNavProps = {
 
 export function RoleNav({ role }: RoleNavProps) {
   const isAdmin = role === "ADMIN"
+  const canViewFiles = role === "ADMIN" || role === "MOD"
 
   const items = [
-    ...(isAdmin
+    ...(canViewFiles
       ? [
         {
           title: "File Manager",
           url: "/files",
           icon: Folder,
+        },
+      ]
+      : []),
+    ...(isAdmin
+      ? [
+        {
+          title: "Users",
+          url: "/users",
+          icon: Users,
         },
         {
           title: "Terminal",

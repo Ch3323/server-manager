@@ -28,7 +28,7 @@ import {
     Upload,
 } from "lucide-react";
 
-import { showErrorToast, showSuccessToast } from "@/lib/client-notify";
+import { getErrorMessage, showErrorToast, showSuccessToast } from "@/lib/client-notify";
 import { Badge } from "@/components/ui/badge";
 import {
     Breadcrumb,
@@ -74,6 +74,43 @@ type UploadItem = {
     relativePath?: string;
 };
 
+type UploadStatus = "queued" | "uploading" | "completed" | "failed";
+
+type UploadProgressItem = {
+    id: string;
+    file: File;
+    relativePath: string;
+    uploadedBytes: number;
+    size: number;
+    status: UploadStatus;
+    errorMessage?: string;
+};
+
+type EntryContextMenuState = {
+    entry: FileEntry;
+    x: number;
+    y: number;
+};
+
+type FileChunk = {
+    index: number;
+    offset: number;
+    size: number;
+};
+
+const DEFAULT_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024;
+const MAX_UPLOAD_CHUNK_SIZE = 32 * 1024 * 1024;
+const MIN_UPLOAD_CHUNK_SIZE = 256 * 1024;
+const UPLOAD_CHUNK_SIZE_STORAGE_KEY = "server-manager.upload.chunk-size";
+
+function clampUploadChunkSize(value: number) {
+    if (!Number.isFinite(value)) {
+        return DEFAULT_UPLOAD_CHUNK_SIZE;
+    }
+
+    return Math.min(MAX_UPLOAD_CHUNK_SIZE, Math.max(MIN_UPLOAD_CHUNK_SIZE, Math.floor(value)));
+}
+
 function joinPath(base: string, name: string) {
     if (!base) return name;
     return `${base}/${name}`;
@@ -105,6 +142,31 @@ function formatBytes(bytes: number) {
 
 function formatDate(value: string) {
     return new Date(value).toLocaleString();
+}
+
+function formatPercent(value: number) {
+    return `${Math.max(0, Math.min(100, value)).toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createFileChunks(fileSize: number, chunkSize: number) {
+    const chunks: FileChunk[] = [];
+    if (fileSize === 0) {
+        return chunks;
+    }
+
+    for (let offset = 0, index = 0; offset < fileSize; offset += chunkSize, index += 1) {
+        chunks.push({
+            index,
+            offset,
+            size: Math.min(chunkSize, fileSize - offset),
+        });
+    }
+
+    return chunks;
 }
 
 function getFileExtension(fileName: string) {
@@ -206,6 +268,10 @@ function inferLanguage(filePath: string) {
 export default function FilesPage() {
     const router = useRouter();
     const { data: session, status } = useSession();
+    const role = session?.user.role;
+    const canAccessFiles = role === "ADMIN" || role === "MOD";
+    const canManageFiles = role === "ADMIN";
+    const isFileManagerReadOnly = role === "MOD";
 
     const [rootName, setRootName] = useState("workspace");
     const [currentPath, setCurrentPath] = useState("");
@@ -239,8 +305,17 @@ export default function FilesPage() {
     const folderPickerRef = useRef<HTMLInputElement | null>(null);
     const dragClientYRef = useRef<number | null>(null);
     const autoScrollFrameRef = useRef<number | null>(null);
+    const activeUploadControllersRef = useRef(new Set<AbortController>());
+    const activeUploadSessionsRef = useRef(new Map<string, string>());
+    const cancelUploadRequestedRef = useRef(false);
+    const preferredChunkSizeRef = useRef(DEFAULT_UPLOAD_CHUNK_SIZE);
+    const pendingUploadProgressRef = useRef(new Map<string, number>());
+    const pendingUploadProgressFrameRef = useRef<number | null>(null);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [uploadQueue, setUploadQueue] = useState<UploadProgressItem[]>([]);
+    const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
+    const [entryContextMenu, setEntryContextMenu] = useState<EntryContextMenuState | null>(null);
     const [draggingEntryPath, setDraggingEntryPath] = useState<string | null>(null);
     const [dragOverDirectoryPath, setDragOverDirectoryPath] = useState<string | null>(null);
 
@@ -254,6 +329,40 @@ export default function FilesPage() {
         () => entries.find((entry) => entry.path === draggingEntryPath) ?? null,
         [entries, draggingEntryPath]
     );
+    const totalUploadBytes = useMemo(
+        () => uploadQueue.reduce((sum, item) => sum + item.size, 0),
+        [uploadQueue]
+    );
+    const uploadedBytes = useMemo(
+        () => uploadQueue.reduce((sum, item) => sum + Math.min(item.uploadedBytes, item.size), 0),
+        [uploadQueue]
+    );
+    const overallUploadProgress = totalUploadBytes > 0 ? (uploadedBytes / totalUploadBytes) * 100 : 0;
+    const currentUploadItem = useMemo(
+        () => uploadQueue.find((item) => item.status === "uploading")
+            ?? uploadQueue.find((item) => item.status === "queued")
+            ?? uploadQueue[uploadQueue.length - 1]
+            ?? null,
+        [uploadQueue]
+    );
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        const storedChunkSize = Number(window.localStorage.getItem(UPLOAD_CHUNK_SIZE_STORAGE_KEY) ?? Number.NaN);
+        if (Number.isFinite(storedChunkSize)) {
+            preferredChunkSizeRef.current = clampUploadChunkSize(storedChunkSize);
+        }
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (pendingUploadProgressFrameRef.current !== null) {
+                cancelAnimationFrame(pendingUploadProgressFrameRef.current);
+                pendingUploadProgressFrameRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         if (!draggingEntryPath) {
@@ -355,7 +464,7 @@ export default function FilesPage() {
             router.push("/auth/login");
             return;
         }
-        if (session.user.role !== "ADMIN") {
+        if (!canAccessFiles) {
             router.push("/dashboard");
             return;
         }
@@ -366,7 +475,7 @@ export default function FilesPage() {
         }, 0);
 
         return () => clearTimeout(timer);
-    }, [session, status, router, hasLoadedOnce]);
+    }, [session, status, router, hasLoadedOnce, canAccessFiles]);
 
     async function openFile(entry: FileEntry) {
         if (isEditorDirty) {
@@ -395,7 +504,7 @@ export default function FilesPage() {
     }
 
     async function saveCurrentFile(nextContent?: string) {
-        if (!editorFilePath) return;
+        if (!editorFilePath || !canManageFiles) return;
 
         const contentToSave = nextContent ?? editorContent;
 
@@ -432,6 +541,7 @@ export default function FilesPage() {
     ) {
         monacoEditorRef.current = editor;
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            if (!canManageFiles) return;
             const latestContent = editor.getValue();
             setEditorContent(latestContent);
             void saveCurrentFile(latestContent);
@@ -474,6 +584,8 @@ export default function FilesPage() {
     }
 
     async function moveEntryToDirectory(fromPath: string, directoryPath: string) {
+        if (!canManageFiles) return;
+
         const nextPath = joinPath(directoryPath, getBaseName(fromPath));
         if (nextPath === fromPath) return;
 
@@ -554,54 +666,438 @@ export default function FilesPage() {
         return nested.flat();
     }
 
+    function updateUploadQueueItem(id: string, updater: (item: UploadProgressItem) => UploadProgressItem) {
+        setUploadQueue((current) => current.map((item) => (item.id === id ? updater(item) : item)));
+    }
+
+    function flushPendingUploadProgress() {
+        pendingUploadProgressFrameRef.current = null;
+
+        if (pendingUploadProgressRef.current.size === 0) {
+            return;
+        }
+
+        const nextProgress = new Map(pendingUploadProgressRef.current);
+        pendingUploadProgressRef.current.clear();
+
+        setUploadQueue((current) => current.map((item) => {
+            const uploadedBytes = nextProgress.get(item.id);
+            if (typeof uploadedBytes !== "number") {
+                return item;
+            }
+
+            return {
+                ...item,
+                uploadedBytes: Math.min(uploadedBytes, item.size),
+            };
+        }));
+    }
+
+    function scheduleUploadProgressUpdate(id: string, uploadedBytes: number) {
+        pendingUploadProgressRef.current.set(id, uploadedBytes);
+
+        if (pendingUploadProgressFrameRef.current !== null) {
+            return;
+        }
+
+        pendingUploadProgressFrameRef.current = requestAnimationFrame(() => {
+            flushPendingUploadProgress();
+        });
+    }
+
+    function clearPendingUploadProgress(id?: string) {
+        if (typeof id === "string") {
+            pendingUploadProgressRef.current.delete(id);
+        } else {
+            pendingUploadProgressRef.current.clear();
+        }
+
+        if (pendingUploadProgressRef.current.size === 0 && pendingUploadProgressFrameRef.current !== null) {
+            cancelAnimationFrame(pendingUploadProgressFrameRef.current);
+            pendingUploadProgressFrameRef.current = null;
+        }
+    }
+
+    function rememberPreferredChunkSize(chunkSize: number) {
+        const normalizedChunkSize = clampUploadChunkSize(chunkSize);
+        preferredChunkSizeRef.current = normalizedChunkSize;
+
+        if (typeof window !== "undefined") {
+            window.localStorage.setItem(UPLOAD_CHUNK_SIZE_STORAGE_KEY, String(normalizedChunkSize));
+        }
+    }
+
+    function shouldRetryUpload(error: unknown) {
+        if (!axios.isAxiosError(error)) {
+            return true;
+        }
+
+        const status = error.response?.status;
+        if (!status) {
+            return true;
+        }
+
+        return status === 408 || status === 425 || status === 429 || status >= 500;
+    }
+
+    function isChunkTooLargeError(error: unknown) {
+        return axios.isAxiosError(error) && error.response?.status === 413;
+    }
+
+    function getRetryDelayMs(error: unknown, attempt: number) {
+        if (axios.isAxiosError(error)) {
+            const retryAfterHeader = error.response?.headers?.["retry-after"];
+            const retryAfterSeconds = Number(retryAfterHeader);
+            if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+                return retryAfterSeconds * 1000;
+            }
+        }
+
+        return Math.min(1500 * 2 ** (attempt - 1), 10_000);
+    }
+
+    function isUploadCancelledError(error: unknown) {
+        return axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError");
+    }
+
+    async function abortUpload(uploadId: string) {
+        if (!canManageFiles) return;
+
+        try {
+            await axios.post("/api/files/upload", {
+                action: "abort",
+                uploadId,
+            });
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    async function cancelActiveUploads() {
+        cancelUploadRequestedRef.current = true;
+        clearPendingUploadProgress();
+
+        const controllers = Array.from(activeUploadControllersRef.current);
+        activeUploadControllersRef.current.clear();
+        controllers.forEach((controller) => controller.abort());
+
+        const sessionEntries = Array.from(activeUploadSessionsRef.current.entries());
+        activeUploadSessionsRef.current.clear();
+
+        await Promise.allSettled(
+            sessionEntries.map(([, uploadId]) => abortUpload(uploadId))
+        );
+    }
+
+    async function uploadSingleFile(queueItem: UploadProgressItem) {
+        const maxChunkAttempts = 3;
+        let uploadId = "";
+        let requestedChunkSize = preferredChunkSizeRef.current;
+
+        while (true) {
+            try {
+                if (cancelUploadRequestedRef.current) {
+                    return {
+                        ok: false as const,
+                        path: queueItem.relativePath,
+                        cancelled: true as const,
+                    };
+                }
+
+                updateUploadQueueItem(queueItem.id, (item) => ({
+                    ...item,
+                    status: "uploading",
+                    uploadedBytes: 0,
+                    errorMessage: undefined,
+                }));
+
+                const initRes = await axios.post("/api/files/upload", {
+                    action: "init",
+                    directoryPath: currentPath,
+                    relativePath: queueItem.relativePath,
+                    fileName: queueItem.file.name,
+                    size: queueItem.size,
+                    chunkSize: requestedChunkSize,
+                });
+
+                uploadId = String(initRes.data.uploadId ?? "");
+                activeUploadSessionsRef.current.set(queueItem.id, uploadId);
+                const chunkSize = Number(initRes.data.chunkSize ?? requestedChunkSize);
+
+                if (!uploadId || !Number.isFinite(chunkSize) || chunkSize <= 0) {
+                    throw new Error("Upload session could not be created");
+                }
+
+                const chunks = createFileChunks(queueItem.size, chunkSize);
+                const chunkProgress = new Map<number, number>();
+                const completedChunks = new Set<number>();
+
+                const syncUploadedBytes = () => {
+                    let nextUploadedBytes = 0;
+
+                    for (const chunk of chunks) {
+                        if (completedChunks.has(chunk.index)) {
+                            nextUploadedBytes += chunk.size;
+                            continue;
+                        }
+
+                        nextUploadedBytes += Math.min(chunkProgress.get(chunk.index) ?? 0, chunk.size);
+                    }
+
+                    scheduleUploadProgressUpdate(queueItem.id, nextUploadedBytes);
+                };
+
+                const uploadChunk = async (chunkInfo: FileChunk) => {
+                    for (let attempt = 1; attempt <= maxChunkAttempts; attempt += 1) {
+                        if (cancelUploadRequestedRef.current) {
+                            throw new DOMException("Upload cancelled", "AbortError");
+                        }
+
+                        const controller = new AbortController();
+                        activeUploadControllersRef.current.add(controller);
+
+                        try {
+                            const chunkBlob = queueItem.file.slice(chunkInfo.offset, chunkInfo.offset + chunkInfo.size);
+
+                            await axios.put(
+                                `/api/files/upload?uploadId=${encodeURIComponent(uploadId)}&offset=${chunkInfo.offset}`,
+                                chunkBlob,
+                                {
+                                    headers: {
+                                        "Content-Type": "application/octet-stream",
+                                    },
+                                    signal: controller.signal,
+                                    onUploadProgress: (event) => {
+                                        if (completedChunks.has(chunkInfo.index)) {
+                                            return;
+                                        }
+
+                                        chunkProgress.set(
+                                            chunkInfo.index,
+                                            Math.min(event.loaded ?? chunkInfo.size, chunkInfo.size)
+                                        );
+                                        syncUploadedBytes();
+                                    },
+                                }
+                            );
+
+                            completedChunks.add(chunkInfo.index);
+                            chunkProgress.delete(chunkInfo.index);
+                            clearPendingUploadProgress(queueItem.id);
+                            updateUploadQueueItem(queueItem.id, (item) => ({
+                                ...item,
+                                errorMessage: undefined,
+                            }));
+                            syncUploadedBytes();
+                            return;
+                        } catch (err) {
+                            chunkProgress.delete(chunkInfo.index);
+                            syncUploadedBytes();
+
+                            if (cancelUploadRequestedRef.current || isUploadCancelledError(err)) {
+                                throw err;
+                            }
+
+                            if (isChunkTooLargeError(err)) {
+                                throw err;
+                            }
+
+                            const canRetry = attempt < maxChunkAttempts && shouldRetryUpload(err);
+                            if (canRetry) {
+                                const retryDelayMs = getRetryDelayMs(err, attempt);
+                                updateUploadQueueItem(queueItem.id, (item) => ({
+                                    ...item,
+                                    errorMessage: `Retrying chunk ${chunkInfo.index + 1}/${chunks.length} in ${Math.ceil(retryDelayMs / 1000)}s`,
+                                }));
+                                await sleep(retryDelayMs);
+                                continue;
+                            }
+
+                            throw err;
+                        } finally {
+                            activeUploadControllersRef.current.delete(controller);
+                        }
+                    }
+                };
+
+                const pendingChunks = [...chunks];
+                const chunkConcurrency = Math.min(4, pendingChunks.length || 1);
+
+                const worker = async () => {
+                    while (pendingChunks.length > 0) {
+                        const nextChunk = pendingChunks.shift();
+                        if (!nextChunk) {
+                            return;
+                        }
+
+                        await uploadChunk(nextChunk);
+                    }
+                };
+
+                await Promise.all(Array.from({ length: chunkConcurrency }, () => worker()));
+
+                await axios.post("/api/files/upload", {
+                    action: "complete",
+                    uploadId,
+                }).then((response) => {
+                    const completedSize = Number(response.data?.size ?? Number.NaN);
+                    const verified = response.data?.verified === true;
+
+                    if (!verified || completedSize !== queueItem.size) {
+                        throw new Error(`Upload verification failed for ${queueItem.relativePath}`);
+                    }
+                });
+                activeUploadSessionsRef.current.delete(queueItem.id);
+                clearPendingUploadProgress(queueItem.id);
+                rememberPreferredChunkSize(chunkSize);
+
+                updateUploadQueueItem(queueItem.id, (item) => ({
+                    ...item,
+                    uploadedBytes: item.size,
+                    status: "completed",
+                    errorMessage: undefined,
+                }));
+
+                return {
+                    ok: true as const,
+                    path: queueItem.relativePath,
+                };
+            } catch (err) {
+                activeUploadSessionsRef.current.delete(queueItem.id);
+                clearPendingUploadProgress(queueItem.id);
+
+                if (cancelUploadRequestedRef.current || isUploadCancelledError(err)) {
+                    updateUploadQueueItem(queueItem.id, (item) => ({
+                        ...item,
+                        status: "failed",
+                        errorMessage: "Upload cancelled",
+                    }));
+
+                    return {
+                        ok: false as const,
+                        path: queueItem.relativePath,
+                        cancelled: true as const,
+                    };
+                }
+
+                if (uploadId) {
+                    await abortUpload(uploadId);
+                    uploadId = "";
+                }
+
+                if (isChunkTooLargeError(err) && requestedChunkSize > MIN_UPLOAD_CHUNK_SIZE) {
+                    requestedChunkSize = clampUploadChunkSize(
+                        Math.max(MIN_UPLOAD_CHUNK_SIZE, Math.floor(requestedChunkSize / 2))
+                    );
+                    updateUploadQueueItem(queueItem.id, (item) => ({
+                        ...item,
+                        status: "queued",
+                        uploadedBytes: 0,
+                        errorMessage: `Chunk too large, retrying with ${formatBytes(requestedChunkSize)} chunks`,
+                    }));
+                    continue;
+                }
+
+                const errorMessage = axios.isAxiosError(err) && err.response?.status === 409
+                    ? `${queueItem.relativePath} (already exists or upload conflict)`
+                    : getErrorMessage(err, `Failed to upload ${queueItem.relativePath}`);
+
+                updateUploadQueueItem(queueItem.id, (item) => ({
+                    ...item,
+                    status: "failed",
+                    errorMessage,
+                }));
+
+                return {
+                    ok: false as const,
+                    path: queueItem.relativePath,
+                    errorMessage,
+                };
+            }
+        }
+    }
+
     async function uploadFiles(uploadItems: UploadItem[]) {
+        if (!canManageFiles) return;
         if (uploadItems.length === 0) return;
 
+        cancelUploadRequestedRef.current = false;
         setIsUploading(true);
+        const queuedItems: UploadProgressItem[] = uploadItems.map((uploadItem) => ({
+            id: crypto.randomUUID(),
+            file: uploadItem.file,
+            relativePath: uploadItem.relativePath ?? uploadItem.file.name,
+            uploadedBytes: 0,
+            size: uploadItem.file.size,
+            status: "queued",
+        }));
 
-        const uploaded: string[] = [];
-        const failed: string[] = [];
+        setUploadQueue(queuedItems);
 
-        for (const uploadItem of uploadItems) {
-            const formData = new FormData();
-            formData.append("file", uploadItem.file);
-            formData.append("directoryPath", currentPath);
-            if (uploadItem.relativePath) {
-                formData.append("relativePath", uploadItem.relativePath);
+        const queue = [...queuedItems];
+        const results: Array<
+            | { ok: true; path: string }
+            | { ok: false; path: string; cancelled: true }
+            | { ok: false; path: string; errorMessage: string }
+        > = [];
+        const concurrency = Math.min(4, queue.length);
+
+        const worker = async () => {
+            while (queue.length > 0) {
+                if (cancelUploadRequestedRef.current) return;
+                const nextItem = queue.shift();
+                if (!nextItem) return;
+                const result = await uploadSingleFile(nextItem);
+                results.push(result);
             }
+        };
 
-            try {
-                await axios.post("/api/files/upload", formData);
-                uploaded.push(uploadItem.relativePath ?? uploadItem.file.name);
-            } catch (err) {
-                if (axios.isAxiosError(err) && err.response?.status === 409) {
-                    failed.push(`${uploadItem.relativePath ?? uploadItem.file.name} (already exists)`);
-                } else {
-                    failed.push(uploadItem.relativePath ?? uploadItem.file.name);
-                }
+        try {
+            await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            if (!cancelUploadRequestedRef.current) {
+                await loadDirectory(currentPath);
             }
+        } finally {
+            clearPendingUploadProgress();
+            activeUploadControllersRef.current.clear();
+            activeUploadSessionsRef.current.clear();
+            setIsDragOver(false);
+            setIsUploading(false);
         }
 
-        await loadDirectory(currentPath);
-        setIsDragOver(false);
+        if (cancelUploadRequestedRef.current) {
+            setUploadQueue([]);
+            showSuccessToast("Upload cancelled");
+            cancelUploadRequestedRef.current = false;
+            return;
+        }
+
+        const uploaded = results.filter((result) => result.ok).map((result) => result.path);
+        const failed = results
+            .filter((result): result is { ok: false; path: string; errorMessage: string } => !result.ok && "errorMessage" in result)
+            .map((result) => result.errorMessage);
 
         if (uploaded.length > 0 && failed.length === 0) {
-            const message = `Uploaded ${uploaded.length} file(s)`;
-            showSuccessToast(message);
+            showSuccessToast(`Uploaded ${uploaded.length} file(s)`);
         } else if (uploaded.length > 0 && failed.length > 0) {
-            const message = `Uploaded ${uploaded.length} file(s), failed ${failed.length} file(s)`;
-            const errorMessage = `Failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`;
-            showSuccessToast(message);
-            showErrorToast(new Error(errorMessage), errorMessage);
+            showSuccessToast(`Uploaded ${uploaded.length} file(s), failed ${failed.length} file(s)`);
+            showErrorToast(
+                new Error(`Failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`),
+                `Failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`
+            );
         } else {
-            const message = `Upload failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`;
-            showErrorToast(new Error(message), message);
+            showErrorToast(
+                new Error(`Upload failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`),
+                `Upload failed: ${failed.slice(0, 4).join(", ")}${failed.length > 4 ? "..." : ""}`
+            );
         }
 
-        setIsUploading(false);
+        setUploadQueue([]);
     }
 
     async function handleCreate() {
+        if (!canManageFiles) return;
+
         const trimmed = createName.trim();
         if (!trimmed) return;
 
@@ -625,6 +1121,7 @@ export default function FilesPage() {
     }
 
     async function handleRename() {
+        if (!canManageFiles) return;
         if (!renameTarget) return;
         const trimmed = renameName.trim();
         if (!trimmed) return;
@@ -653,6 +1150,7 @@ export default function FilesPage() {
     }
 
     async function handleDelete() {
+        if (!canManageFiles) return;
         if (!deleteTarget) return;
 
         try {
@@ -677,14 +1175,76 @@ export default function FilesPage() {
     }
 
     function openRenameDialog(entry: FileEntry) {
+        if (!canManageFiles) return;
+
         setRenameTarget(entry);
         setRenameName(entry.name);
         setRenameDialogOpen(true);
     }
 
     function openDeleteDialog(entry: FileEntry) {
+        if (!canManageFiles) return;
+
         setDeleteTarget(entry);
         setDeleteDialogOpen(true);
+    }
+
+    function closeEntryContextMenu() {
+        setEntryContextMenu(null);
+    }
+
+    function handleActionMenuOpenChange(menuId: string, open: boolean) {
+        if (open) {
+            setOpenActionMenuId(menuId);
+            closeEntryContextMenu();
+            return;
+        }
+
+        setOpenActionMenuId((current) => (current === menuId ? null : current));
+    }
+
+    function renderEntryActionItems(entry: FileEntry, onAction?: () => void) {
+        return (
+            <>
+                <DropdownMenuItem
+                    onClick={() => {
+                        onAction?.();
+                        void openEntry(entry);
+                    }}
+                >
+                    {entry.type === "directory" ? (
+                        <FolderOpen className="h-4 w-4" />
+                    ) : (
+                        <FileText className="h-4 w-4" />
+                    )}
+                    Open
+                </DropdownMenuItem>
+                {canManageFiles ? (
+                    <>
+                        <DropdownMenuItem
+                            onClick={() => {
+                                onAction?.();
+                                openRenameDialog(entry);
+                            }}
+                        >
+                            <Pencil className="h-4 w-4" />
+                            Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => {
+                                onAction?.();
+                                openDeleteDialog(entry);
+                            }}
+                        >
+                            <Trash2 className="h-4 w-4" />
+                            Delete
+                        </DropdownMenuItem>
+                    </>
+                ) : null}
+            </>
+        );
     }
 
     if (status === "loading" || (!hasLoadedOnce && isLoadingList)) {
@@ -698,7 +1258,7 @@ export default function FilesPage() {
         );
     }
 
-    if (!session || session.user.role !== "ADMIN") return null;
+    if (!session || !canAccessFiles) return null;
 
     return (
         <div className="p-4 md:p-8 space-y-6">
@@ -710,7 +1270,9 @@ export default function FilesPage() {
                                 <div>
                                     <CardTitle className="text-2xl">File Manager</CardTitle>
                                     <CardDescription className="mt-1">
-                                        Browse and manage files in this workspace.
+                                        {canManageFiles
+                                            ? "Browse and manage files in this workspace."
+                                            : "Browse files in this workspace."}
                                     </CardDescription>
                                 </div>
                                 <Breadcrumb>
@@ -753,6 +1315,9 @@ export default function FilesPage() {
                                         {currentPath ? `${rootName}/${currentPath}` : `${rootName}/`}
                                     </span>
                                 </Badge>
+                                {isFileManagerReadOnly ? (
+                                    <Badge variant="secondary">View only</Badge>
+                                ) : null}
                                 <Button
                                     variant="outline"
                                     onClick={() => void loadDirectory(currentPath)}
@@ -760,35 +1325,47 @@ export default function FilesPage() {
                                     <RefreshCw className="h-4 w-4" />
                                     Refresh
                                 </Button>
-                                <Button
-                                    variant="outline"
-                                    disabled={isUploading}
-                                    onClick={() => filePickerRef.current?.click()}
-                                >
-                                    {isUploading ? <Spinner className="h-4 w-4" /> : <Upload className="h-4 w-4" />}
-                                    Upload Files
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    onClick={() => {
-                                        setCreateType("file");
-                                        setCreateName("");
-                                        setCreateDialogOpen(true);
-                                    }}
-                                >
-                                    <Plus className="h-4 w-4" />
-                                    New File
-                                </Button>
-                                <Button
-                                    onClick={() => {
-                                        setCreateType("directory");
-                                        setCreateName("");
-                                        setCreateDialogOpen(true);
-                                    }}
-                                >
-                                    <FolderOpen className="h-4 w-4" />
-                                    New Folder
-                                </Button>
+                                {canManageFiles ? (
+                                    <>
+                                        <Button
+                                            variant="outline"
+                                            disabled={isUploading}
+                                            onClick={() => filePickerRef.current?.click()}
+                                        >
+                                            {isUploading ? <Spinner className="h-4 w-4" /> : <Upload className="h-4 w-4" />}
+                                            Upload Files
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            disabled={isUploading}
+                                            onClick={() => folderPickerRef.current?.click()}
+                                        >
+                                            <FolderOpen className="h-4 w-4" />
+                                            Upload Folder
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => {
+                                                setCreateType("file");
+                                                setCreateName("");
+                                                setCreateDialogOpen(true);
+                                            }}
+                                        >
+                                            <Plus className="h-4 w-4" />
+                                            New File
+                                        </Button>
+                                        <Button
+                                            onClick={() => {
+                                                setCreateType("directory");
+                                                setCreateName("");
+                                                setCreateDialogOpen(true);
+                                            }}
+                                        >
+                                            <FolderOpen className="h-4 w-4" />
+                                            New Folder
+                                        </Button>
+                                    </>
+                                ) : null}
                             </div>
                         </div>
 
@@ -852,27 +1429,98 @@ export default function FilesPage() {
                                 event.target.value = "";
                             }}
                         />
+                        <Dialog open={uploadQueue.length > 0}>
+                            <DialogContent
+                                className="w-[min(24rem,calc(100%-2rem))] gap-3 overflow-hidden"
+                                showCloseButton={false}
+                                onInteractOutside={(event) => event.preventDefault()}
+                                onEscapeKeyDown={(event) => event.preventDefault()}
+                            >
+                                <DialogHeader>
+                                    <DialogTitle>Uploading files</DialogTitle>
+                                    <DialogDescription className="max-w-full break-all whitespace-normal">
+                                        {currentUploadItem?.relativePath ?? "Preparing upload..."}
+                                    </DialogDescription>
+                                </DialogHeader>
+                                <div className="min-w-0 space-y-2">
+                                    <div className="h-2 overflow-hidden rounded-full bg-muted">
+                                        <div
+                                            className="h-full rounded-full bg-primary transition-[width]"
+                                            style={{ width: `${overallUploadProgress}%` }}
+                                        />
+                                    </div>
+                                <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground">
+                                        <span className="min-w-0 break-all whitespace-normal">{formatBytes(uploadedBytes)} / {formatBytes(totalUploadBytes)}</span>
+                                        <span className="shrink-0">{formatPercent(overallUploadProgress)}</span>
+                                    </div>
+                                </div>
+                                <DialogFooter>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => {
+                                            void cancelActiveUploads();
+                                        }}
+                                    >
+                                        Cancel Upload
+                                    </Button>
+                                </DialogFooter>
+                            </DialogContent>
+                        </Dialog>
+                        <DropdownMenu
+                            modal={false}
+                            open={entryContextMenu !== null}
+                            onOpenChange={(open) => {
+                                if (!open) {
+                                    closeEntryContextMenu();
+                                }
+                            }}
+                        >
+                            <DropdownMenuTrigger asChild>
+                                <button
+                                    aria-hidden="true"
+                                    className="fixed h-0 w-0 opacity-0 pointer-events-none"
+                                    style={{
+                                        left: entryContextMenu?.x ?? 0,
+                                        top: entryContextMenu?.y ?? 0,
+                                    }}
+                                    type="button"
+                                />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                                align="start"
+                                className="w-44"
+                                sideOffset={2}
+                                onCloseAutoFocus={(event) => event.preventDefault()}
+                            >
+                                {entryContextMenu ? renderEntryActionItems(entryContextMenu.entry, closeEntryContextMenu) : null}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                         <div
                             className="relative"
                             onDragEnter={(event) => {
+                                if (!canManageFiles) return;
                                 event.preventDefault();
                                 dragClientYRef.current = event.clientY;
                                 if (draggingEntryPath) return;
                                 setIsDragOver(true);
                             }}
                             onDragOver={(event) => {
+                                if (!canManageFiles) return;
                                 event.preventDefault();
                                 dragClientYRef.current = event.clientY;
                                 if (draggingEntryPath) return;
                                 setIsDragOver(true);
                             }}
                             onDragLeave={(event) => {
+                                if (!canManageFiles) return;
                                 const nextTarget = event.relatedTarget as Node | null;
                                 if (nextTarget && event.currentTarget.contains(nextTarget)) return;
                                 if (draggingEntryPath) return;
                                 setIsDragOver(false);
                             }}
                             onDrop={(event) => {
+                                if (!canManageFiles) return;
                                 event.preventDefault();
                                 dragClientYRef.current = null;
                                 if (draggingEntryPath) {
@@ -914,9 +1562,19 @@ export default function FilesPage() {
                                                     key={entry.path}
                                                     className={`bg-background transition hover:bg-muted/50 ${isDraggingRow ? "opacity-45" : ""
                                                         } ${isDropTarget ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
-                                                    draggable={!isUploading}
+                                                    draggable={canManageFiles && !isUploading}
+                                                    onContextMenu={(event) => {
+                                                        event.preventDefault();
+                                                        event.stopPropagation();
+                                                        setOpenActionMenuId(null);
+                                                        setEntryContextMenu({
+                                                            entry,
+                                                            x: event.clientX,
+                                                            y: event.clientY,
+                                                        });
+                                                    }}
                                                     onDragStart={(event) => {
-                                                        if (isUploading) {
+                                                        if (!canManageFiles || isUploading) {
                                                             event.preventDefault();
                                                             return;
                                                         }
@@ -927,11 +1585,13 @@ export default function FilesPage() {
                                                         event.dataTransfer.setData("text/plain", entry.path);
                                                     }}
                                                     onDragEnd={() => {
+                                                        if (!canManageFiles) return;
                                                         setDraggingEntryPath(null);
                                                         setDragOverDirectoryPath(null);
                                                         dragClientYRef.current = null;
                                                     }}
                                                     onDragEnter={(event) => {
+                                                        if (!canManageFiles) return;
                                                         if (entry.type !== "directory" || !canDropIntoDirectory(entry.path)) return;
                                                         event.preventDefault();
                                                         event.stopPropagation();
@@ -939,6 +1599,7 @@ export default function FilesPage() {
                                                         setDragOverDirectoryPath(entry.path);
                                                     }}
                                                     onDragOver={(event) => {
+                                                        if (!canManageFiles) return;
                                                         if (entry.type !== "directory" || !canDropIntoDirectory(entry.path)) return;
                                                         event.preventDefault();
                                                         event.stopPropagation();
@@ -949,6 +1610,7 @@ export default function FilesPage() {
                                                         }
                                                     }}
                                                     onDragLeave={(event) => {
+                                                        if (!canManageFiles) return;
                                                         if (entry.type !== "directory") return;
                                                         const nextTarget = event.relatedTarget as Node | null;
                                                         if (nextTarget && event.currentTarget.contains(nextTarget)) return;
@@ -957,6 +1619,7 @@ export default function FilesPage() {
                                                         }
                                                     }}
                                                     onDrop={(event) => {
+                                                        if (!canManageFiles) return;
                                                         if (entry.type !== "directory" || !canDropIntoDirectory(entry.path)) return;
                                                         event.preventDefault();
                                                         event.stopPropagation();
@@ -1000,7 +1663,11 @@ export default function FilesPage() {
                                                             </div>
                                                         </button>
 
-                                                        <DropdownMenu>
+                                                        <DropdownMenu
+                                                            modal={false}
+                                                            open={openActionMenuId === `mobile:${entry.path}`}
+                                                            onOpenChange={(open) => handleActionMenuOpenChange(`mobile:${entry.path}`, open)}
+                                                        >
                                                             <DropdownMenuTrigger asChild>
                                                                 <Button
                                                                     variant="ghost"
@@ -1010,29 +1677,12 @@ export default function FilesPage() {
                                                                     <span className="sr-only">Open actions</span>
                                                                 </Button>
                                                             </DropdownMenuTrigger>
-                                                            <DropdownMenuContent align="end" className="w-44">
-                                                                <DropdownMenuItem
-                                                                    onClick={() => void openEntry(entry)}
-                                                                >
-                                                                    {entry.type === "directory" ? (
-                                                                        <FolderOpen className="h-4 w-4" />
-                                                                    ) : (
-                                                                        <FileText className="h-4 w-4" />
-                                                                    )}
-                                                                    Open
-                                                                </DropdownMenuItem>
-                                                                <DropdownMenuItem onClick={() => openRenameDialog(entry)}>
-                                                                    <Pencil className="h-4 w-4" />
-                                                                    Rename
-                                                                </DropdownMenuItem>
-                                                                <DropdownMenuSeparator />
-                                                                <DropdownMenuItem
-                                                                    variant="destructive"
-                                                                    onClick={() => openDeleteDialog(entry)}
-                                                                >
-                                                                    <Trash2 className="h-4 w-4" />
-                                                                    Delete
-                                                                </DropdownMenuItem>
+                                                            <DropdownMenuContent
+                                                                align="end"
+                                                                className="w-44"
+                                                                onCloseAutoFocus={(event) => event.preventDefault()}
+                                                            >
+                                                                {renderEntryActionItems(entry)}
                                                             </DropdownMenuContent>
                                                         </DropdownMenu>
                                                     </div>
@@ -1072,7 +1722,11 @@ export default function FilesPage() {
                                                         </button>
 
                                                         <div className="flex justify-end">
-                                                            <DropdownMenu>
+                                                            <DropdownMenu
+                                                                modal={false}
+                                                                open={openActionMenuId === `desktop:${entry.path}`}
+                                                                onOpenChange={(open) => handleActionMenuOpenChange(`desktop:${entry.path}`, open)}
+                                                            >
                                                                 <DropdownMenuTrigger asChild>
                                                                     <Button
                                                                         variant="ghost"
@@ -1082,29 +1736,12 @@ export default function FilesPage() {
                                                                         <span className="sr-only">Open actions</span>
                                                                     </Button>
                                                                 </DropdownMenuTrigger>
-                                                                <DropdownMenuContent align="end" className="w-44">
-                                                                    <DropdownMenuItem
-                                                                        onClick={() => void openEntry(entry)}
-                                                                    >
-                                                                        {entry.type === "directory" ? (
-                                                                            <FolderOpen className="h-4 w-4" />
-                                                                        ) : (
-                                                                            <FileText className="h-4 w-4" />
-                                                                        )}
-                                                                        Open
-                                                                    </DropdownMenuItem>
-                                                                    <DropdownMenuItem onClick={() => openRenameDialog(entry)}>
-                                                                        <Pencil className="h-4 w-4" />
-                                                                        Rename
-                                                                    </DropdownMenuItem>
-                                                                    <DropdownMenuSeparator />
-                                                                    <DropdownMenuItem
-                                                                        variant="destructive"
-                                                                        onClick={() => openDeleteDialog(entry)}
-                                                                    >
-                                                                        <Trash2 className="h-4 w-4" />
-                                                                        Delete
-                                                                    </DropdownMenuItem>
+                                                                <DropdownMenuContent
+                                                                    align="end"
+                                                                    className="w-44"
+                                                                    onCloseAutoFocus={(event) => event.preventDefault()}
+                                                                >
+                                                                    {renderEntryActionItems(entry)}
                                                                 </DropdownMenuContent>
                                                             </DropdownMenu>
                                                         </div>
@@ -1120,14 +1757,16 @@ export default function FilesPage() {
                                     </div>
                                 ) : null}
                             </div>
-                            <div
-                                className={`pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-dashed border-2 border-primary bg-primary/10 transition-all duration-200 ${isDragOver ? "opacity-100 scale-100" : "opacity-0 scale-95"
-                                    }`}
-                            >
-                                <div className="rounded-md bg-transparent px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-transform duration-200">
-                                    <Upload className="h-16 w-16" />
+                            {canManageFiles ? (
+                                <div
+                                    className={`pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-dashed border-2 border-primary bg-primary/10 transition-all duration-200 ${isDragOver ? "opacity-100 scale-100" : "opacity-0 scale-95"
+                                        }`}
+                                >
+                                    <div className="rounded-md bg-transparent px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-transform duration-200">
+                                        <Upload className="h-16 w-16" />
+                                    </div>
                                 </div>
-                            </div>
+                            ) : null}
                         </div>
                     </CardContent>
                 </Card>
@@ -1151,30 +1790,36 @@ export default function FilesPage() {
                                 {editorLineCount} lines | {editorCharCount} chars
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
-                                {isEditorDirty ? (
-                                    <Badge variant="outline" className="border-amber-500/40 text-amber-600">
-                                        Unsaved
-                                    </Badge>
+                                {canManageFiles ? (
+                                    <>
+                                        {isEditorDirty ? (
+                                            <Badge variant="outline" className="border-amber-500/40 text-amber-600">
+                                                Unsaved
+                                            </Badge>
+                                        ) : (
+                                            <Badge variant="outline">Saved</Badge>
+                                        )}
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setEditorContent(initialEditorContent)}
+                                            disabled={!isEditorDirty || isSavingFile || isLoadingFile}
+                                        >
+                                            <RotateCcw className="h-4 w-4" />
+                                            Reset
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            onClick={() => void saveCurrentFile()}
+                                            disabled={!editorFilePath || !isEditorDirty || isSavingFile || isLoadingFile}
+                                        >
+                                            {isSavingFile ? <Spinner className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                                            Save
+                                        </Button>
+                                    </>
                                 ) : (
-                                    <Badge variant="outline">Saved</Badge>
+                                    <Badge variant="secondary">View only</Badge>
                                 )}
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setEditorContent(initialEditorContent)}
-                                    disabled={!isEditorDirty || isSavingFile || isLoadingFile}
-                                >
-                                    <RotateCcw className="h-4 w-4" />
-                                    Reset
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    onClick={() => void saveCurrentFile()}
-                                    disabled={!editorFilePath || !isEditorDirty || isSavingFile || isLoadingFile}
-                                >
-                                    {isSavingFile ? <Spinner className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-                                    Save
-                                </Button>
                             </div>
                         </div>
 
@@ -1188,7 +1833,11 @@ export default function FilesPage() {
                                     height="500px"
                                     language={editorFilePath ? inferLanguage(editorFilePath) : "plaintext"}
                                     value={editorContent}
-                                    onChange={(value) => setEditorContent(value ?? "")}
+                                    onChange={(value) => {
+                                        if (canManageFiles) {
+                                            setEditorContent(value ?? "");
+                                        }
+                                    }}
                                     onMount={handleMonacoMount}
                                     theme="vs-dark"
                                     options={{
@@ -1206,6 +1855,7 @@ export default function FilesPage() {
                                         folding: true,
                                         lineNumbers: "on",
                                         formatOnPaste: true,
+                                        readOnly: !canManageFiles,
                                     }}
                                 />
                             </div>

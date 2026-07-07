@@ -34,9 +34,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-server_manager}
       NEXTAUTH_URL: ${NEXTAUTH_URL}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
       ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       FILE_MANAGER_ROOT: /workspace/apps
+      FILE_MANAGER_HOST_ROOT: /home/nxdus/apps
       FILE_MANAGER_PROTECTED_PATHS: ${FILE_MANAGER_PROTECTED_PATHS:-/etc,/boot,/proc,/sys,/dev}
       TERMINAL_ROOT_PATH: /workspace/apps
       DOCKER_SOCKET_PATH: /var/run/docker.sock

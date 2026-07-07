@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -24,7 +23,7 @@ const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z
     .string()
-    .min(12, 'Password must be at least 12 characters')
+    .min(8, 'Password must be at least 8 characters')
     .regex(/[a-z]/, 'Password must include a lowercase letter')
     .regex(/[A-Z]/, 'Password must include an uppercase letter')
     .regex(/[0-9]/, 'Password must include a number'),
@@ -53,7 +52,6 @@ async function parseApiResponse(response: Response) {
 }
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -93,10 +91,7 @@ export default function RegisterPage() {
       }
 
       setSuccess(true);
-      showSuccessToast('Account created successfully');
-      setTimeout(() => {
-        router.push('/auth/login');
-      }, 2000);
+      showSuccessToast('Account created. Check your email to verify it.');
     } catch (err) {
       const message = 'Something went wrong. Please try again.';
       setError(message);
@@ -112,13 +107,16 @@ export default function RegisterPage() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="w-full max-w-md bg-transparent ring-0">
           <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl font-bold">Account created</CardTitle>
+            <CardTitle className="text-2xl font-bold">Check your email</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               <p className="text-muted-foreground">
-                Your account has been created successfully. Redirecting to login...
+                Your account has been created. Verify your email before logging in.
               </p>
+              <Button asChild className="w-full">
+                <Link href="/auth/login">Back to login</Link>
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -175,6 +173,7 @@ export default function RegisterPage() {
                         className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="••••••••"
                         type="password"
+                        minLength={8}
                         disabled={isLoading}
                         {...field}
                       />
@@ -195,6 +194,7 @@ export default function RegisterPage() {
                         className="focus-visible:ring-0 aria-[invalid]:ring-0"
                         placeholder="••••••••"
                         type="password"
+                        minLength={8}
                         disabled={isLoading}
                         {...field}
                       />

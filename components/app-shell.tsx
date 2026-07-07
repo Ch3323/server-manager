@@ -9,7 +9,13 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "./ui/tooltip";
 import { SectionNavBar } from "./sidebar/section-navbar";
 
-const AUTH_ROUTES = ["/auth/login", "/auth/register"];
+const AUTH_ROUTES = [
+    "/auth/login",
+    "/auth/register",
+    "/auth/forgot-password",
+    "/auth/reset-password",
+    "/auth/verify-email",
+];
 
 interface Item {
     label: string,
@@ -31,7 +37,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     }, [pathname]);
 
     if (hideSidebar) {
-        return <>{children}</>;
+        return <Suspense>{children}</Suspense>;
     }
 
     return (

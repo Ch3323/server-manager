@@ -60,6 +60,8 @@ newgrp docker
 - `DATABASE_URL`: PostgreSQL connection string
 - `NEXTAUTH_URL`: public URL of the app
 - `NEXTAUTH_SECRET`: secret used by NextAuth
+- `RESEND_API_KEY`: optional Resend API key used to send verification and password reset emails
+- `RESEND_FROM_EMAIL`: optional verified Resend sender such as `Server Manager <auth@example.com>`
 - `CORS_ALLOWED_ORIGINS`: optional comma-separated origins allowed for cross-origin API access
 - `ALLOW_PUBLIC_REGISTRATION`: optional toggle to disable open registration
 - `FILE_MANAGER_ROOT`: optional directory exposed by the file manager
@@ -90,6 +92,8 @@ POSTGRES_PASSWORD=replace-with-a-strong-password
 POSTGRES_DB=server_manager
 NEXTAUTH_URL=http://YOUR_SERVER_IP:3000
 NEXTAUTH_SECRET=replace-with-a-long-random-secret
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=
 ALLOW_PUBLIC_REGISTRATION=false
 CORS_ALLOWED_ORIGINS=
 ```

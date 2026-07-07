@@ -11,7 +11,7 @@ export function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
+  const auth = await requireApiSession(request, { roles: ["ADMIN", "MOD"] });
 
   if (auth instanceof Response) {
     return auth;

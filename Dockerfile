@@ -28,29 +28,27 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates openssl git \
   && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --system --gid 1001 nodejs \
-  && useradd --system --uid 1001 --gid nodejs nextjs \
-  && mkdir -p /workspace \
-  && chown nextjs:nodejs /workspace
+RUN mkdir -p /workspace \
+  && chown node:node /workspace
 
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=nextjs:nodejs /app/package-lock.json ./package-lock.json
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/server.mjs ./server.mjs
-COPY --from=builder --chown=nextjs:nodejs /app/next.config.ts ./next.config.ts
-COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./prisma.config.ts
-COPY --from=builder --chown=nextjs:nodejs /app/app/generated ./app/generated
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/docker/entrypoint.sh ./entrypoint.sh
+COPY --from=builder --chown=node:node /app/package.json ./package.json
+COPY --from=builder --chown=node:node /app/package-lock.json ./package-lock.json
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/server.mjs ./server.mjs
+COPY --from=builder --chown=node:node /app/next.config.ts ./next.config.ts
+COPY --from=builder --chown=node:node /app/prisma ./prisma
+COPY --from=builder --chown=node:node /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder --chown=node:node /app/app/generated ./app/generated
+COPY --from=builder --chown=node:node /app/public ./public
+COPY --from=builder --chown=node:node /app/.next ./.next
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/docker/entrypoint.sh ./entrypoint.sh
 
 RUN chmod +x /app/entrypoint.sh
 
-USER nextjs
+USER node
 EXPOSE 3001
 
 ENV PORT=3001

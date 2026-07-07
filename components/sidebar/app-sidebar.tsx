@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Container, FileCodeCorner, Folder, LayoutDashboard } from "lucide-react"
+import { Container, FileCodeCorner, LayoutDashboard } from "lucide-react"
 
 import { NavMain } from "./nav-main"
 import { NavUser, NavUserSkeleton } from "./nav-user"

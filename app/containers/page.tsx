@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Checkbox } from "@/components/ui/checkbox";
+import { ContainerCreateDialog } from "@/components/container-create-dialog";
 
 type Role = "ADMIN" | "MOD" | "USER";
 type ContainerAction = "start" | "stop" | "restart" | "remove" | "rename";
@@ -47,6 +47,9 @@ interface ImageOption {
   primaryTag: string;
   isDangling: boolean;
 }
+
+const MAX_LOG_CHARS = 200_000;
+const LOG_BOTTOM_THRESHOLD_PX = 24;
 
 export default function ContainersPage() {
   const router = useRouter();
@@ -72,11 +75,10 @@ export default function ContainersPage() {
   const [logs, setLogs] = useState("");
   const [logsError, setLogsError] = useState<string | null>(null);
   const [isLogsLoading, setIsLogsLoading] = useState(false);
+  const logsRef = useRef<HTMLPreElement | null>(null);
+  const shouldAutoScrollLogsRef = useRef(true);
+  const shouldForceInitialLogScrollRef = useRef(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createImageRef, setCreateImageRef] = useState("");
-  const [createContainerName, setCreateContainerName] = useState("");
-  const [startAfterCreate, setStartAfterCreate] = useState(true);
-  const [isCreatingContainer, setIsCreatingContainer] = useState(false);
   const [imageOptions, setImageOptions] = useState<ImageOption[]>([]);
   const [isLoadingImageOptions, setIsLoadingImageOptions] = useState(false);
 
@@ -84,6 +86,13 @@ export default function ContainersPage() {
   const isAdmin = role === "ADMIN";
   const isModOrAdmin = role === "ADMIN" || role === "MOD";
   const isViewOnly = role === "USER";
+  const isLogTargetRunning = logTarget?.state === "running";
+  const logStatusLabel = logsError ? "Error" : isLogTargetRunning ? "Live" : "Snapshot";
+  const logStatusClass = logsError
+    ? "border-red-500/30 bg-red-500/10 text-red-600"
+    : isLogTargetRunning
+      ? "border-green-500/30 bg-green-500/10 text-green-700"
+      : "border-muted-foreground/20 bg-muted text-muted-foreground";
 
   async function fetchContainers(showSpinner = false) {
     if (showSpinner) setIsRefreshing(true);
@@ -115,9 +124,6 @@ export default function ContainersPage() {
           .then((res) => {
             const usableImages = (res.data as ImageOption[]).filter((img) => !img.isDangling);
             setImageOptions(usableImages);
-            if (usableImages.length > 0) {
-              setCreateImageRef(usableImages[0].primaryTag);
-            }
           })
           .catch((err) => {
             console.error(err);
@@ -170,27 +176,132 @@ export default function ContainersPage() {
     }
   }
 
-  async function openLogs(target: ContainerItem) {
+  function openLogs(target: ContainerItem) {
+    shouldAutoScrollLogsRef.current = true;
+    shouldForceInitialLogScrollRef.current = true;
     setLogTarget(target);
     setLogs("");
     setLogsError(null);
     setIsLogsLoading(true);
-
-    try {
-      const res = await axios.get("/api/containers/logs", {
-        params: {
-          containerId: target.id,
-          tail: 250,
-        },
-      });
-      setLogs(res.data.logs ?? "");
-    } catch (err) {
-      console.error(err);
-      setLogsError(showErrorToast(err, "Failed to load logs"));
-    } finally {
-      setIsLogsLoading(false);
-    }
   }
+
+  const scrollLogsToBottom = useCallback(() => {
+    const logsElement = logsRef.current;
+    if (!logsElement) return;
+
+    logsElement.scrollTop = logsElement.scrollHeight;
+  }, []);
+
+  const scheduleScrollLogsToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(scrollLogsToBottom);
+    });
+  }, [scrollLogsToBottom]);
+
+  function updateLogAutoScrollPreference() {
+    const logsElement = logsRef.current;
+    if (!logsElement) return;
+
+    const distanceFromBottom =
+      logsElement.scrollHeight - logsElement.scrollTop - logsElement.clientHeight;
+    shouldAutoScrollLogsRef.current = distanceFromBottom <= LOG_BOTTOM_THRESHOLD_PX;
+  }
+
+  useEffect(() => {
+    if (!logTarget || !session) return;
+
+    const params = new URLSearchParams({
+      containerId: logTarget.id,
+      tail: "250",
+    });
+    const events = new EventSource(`/api/containers/logs?${params.toString()}`, {
+      withCredentials: true,
+    });
+    const shouldReconnect = logTarget.state === "running";
+    shouldAutoScrollLogsRef.current = true;
+    shouldForceInitialLogScrollRef.current = true;
+
+    events.onopen = () => {
+      setLogsError(null);
+      setIsLogsLoading(false);
+    };
+
+    events.addEventListener("ready", () => {
+      shouldAutoScrollLogsRef.current = true;
+      shouldForceInitialLogScrollRef.current = true;
+      setLogsError(null);
+      setIsLogsLoading(false);
+      scheduleScrollLogsToBottom();
+    });
+
+    events.addEventListener("log", (event) => {
+      setIsLogsLoading(false);
+      setLogsError(null);
+
+      try {
+        const payload = JSON.parse(event.data) as { chunk?: string };
+        if (payload.chunk) {
+          setLogs((current) => (current + payload.chunk).slice(-MAX_LOG_CHARS));
+        }
+      } catch (err) {
+        console.error("Failed to parse container log event:", err);
+      }
+    });
+
+    events.addEventListener("log-error", (event) => {
+      setIsLogsLoading(false);
+
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+        setLogsError(payload.message ?? "Container log stream error");
+      } catch {
+        setLogsError("Container log stream disconnected. Reconnecting...");
+      }
+    });
+
+    events.addEventListener("end", () => {
+      setIsLogsLoading(false);
+      if (!shouldReconnect) {
+        events.close();
+      }
+    });
+
+    events.onerror = () => {
+      setIsLogsLoading(false);
+      if (!shouldReconnect) {
+        events.close();
+        return;
+      }
+      setLogsError("Container log stream disconnected. Reconnecting...");
+    };
+
+    return () => {
+      events.close();
+    };
+  }, [logTarget, scheduleScrollLogsToBottom, session]);
+
+  useEffect(() => {
+    const logsElement = logsRef.current;
+    if (!logsElement) return;
+    if (!shouldAutoScrollLogsRef.current && !shouldForceInitialLogScrollRef.current) return;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        logsElement.scrollTop = logsElement.scrollHeight;
+      });
+      if (logs.length > 0) {
+        shouldForceInitialLogScrollRef.current = false;
+      }
+    });
+  }, [logs]);
+
+  useEffect(() => {
+    if (!logTarget) return;
+
+    shouldAutoScrollLogsRef.current = true;
+    shouldForceInitialLogScrollRef.current = true;
+    scheduleScrollLogsToBottom();
+  }, [logTarget, scheduleScrollLogsToBottom]);
 
   async function runContainerAction(action: ContainerAction, target: ContainerItem, payload?: Record<string, unknown>) {
     setActionLoading({ containerId: target.id, action });
@@ -231,31 +342,6 @@ export default function ContainersPage() {
       showErrorToast(err, `Bulk action "${action}" failed`);
     } finally {
       setBulkLoading(null);
-    }
-  }
-
-  async function handleCreateContainer() {
-    if (!createImageRef) return;
-    setIsCreatingContainer(true);
-
-    try {
-      const res = await axios.post("/api/containers/create", {
-        imageRef: createImageRef,
-        containerName: createContainerName.trim(),
-        startAfterCreate,
-      });
-
-      const createdName = res.data?.name ?? "container";
-      const message = `Created ${createdName}${startAfterCreate ? " and started it" : ""}`;
-      showSuccessToast(message);
-      setCreateDialogOpen(false);
-      setCreateContainerName("");
-      await fetchContainers();
-    } catch (err) {
-      console.error(err);
-      showErrorToast(err, "Failed to create container");
-    } finally {
-      setIsCreatingContainer(false);
     }
   }
 
@@ -559,90 +645,44 @@ export default function ContainersPage() {
       </Dialog>
 
       <Dialog open={logTarget !== null} onOpenChange={(open) => !open && setLogTarget(null)}>
-        <DialogContent className="sm:max-w-3xl" showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Container Logs</DialogTitle>
-            <DialogDescription>{logTarget?.name}</DialogDescription>
+        <DialogContent className="flex h-[min(86dvh,780px)] max-h-[calc(100dvh-1rem)] !w-[calc(100vw-1rem)] !max-w-[1440px] min-h-0 min-w-0 flex-col gap-0 p-0" showCloseButton={false}>
+          <DialogHeader className="shrink-0 border-b bg-muted/20 px-4 py-3 text-left">
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle className="text-base">Container Logs</DialogTitle>
+                <DialogDescription className="truncate">{logTarget?.name}</DialogDescription>
+              </div>
+              <Badge variant="outline" className={`shrink-0 ${logStatusClass}`}>
+                {isLogsLoading ? "Connecting" : logStatusLabel}
+              </Badge>
+            </div>
           </DialogHeader>
-          {logsError ? <div className="rounded-md border border-red-400 bg-red-400/20 p-3 text-sm text-red-500">{logsError}</div> : null}
-          <pre className="max-h-[60vh] overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap wrap-break-word">
+          {logsError ? <div className="shrink-0 border-b px-4 py-2 text-xs text-red-600">{logsError}</div> : null}
+          <pre
+            ref={logsRef}
+            onScroll={updateLogAutoScrollPreference}
+            className="block min-h-0 w-full min-w-0 flex-1 overflow-auto bg-background px-4 py-3 font-mono text-xs leading-5 whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+          >
             {isLogsLoading ? "Loading logs..." : logs || "No logs found"}
           </pre>
-          <DialogFooter>
+          <DialogFooter className="mx-0 mb-0 shrink-0 rounded-none border-x-0 border-b-0 border-t bg-muted/20 px-4 py-3">
             <Button
               variant="outline"
+              size="sm"
               onClick={() => setLogTarget(null)}
             >
               Close
-            </Button>
-            <Button
-              onClick={() => {
-                if (!logTarget) return;
-                openLogs(logTarget);
-              }}
-              disabled={isLogsLoading}
-            >
-              {isLogsLoading ? <Spinner className="h-4 w-4 mr-2" /> : null}
-              Refresh Logs
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Create Container</DialogTitle>
-            <DialogDescription>
-              Create a new container from a pulled image.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">Image</p>
-              <Select value={createImageRef} onValueChange={setCreateImageRef}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select image" />
-                </SelectTrigger>
-                <SelectContent>
-                  {imageOptions.map((img) => (
-                    <SelectItem key={img.id} value={img.primaryTag}>
-                      {img.primaryTag}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium">Container Name (optional)</p>
-              <Input
-                value={createContainerName}
-                onChange={(e) => setCreateContainerName(e.target.value)}
-                placeholder="my-app-container"
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={startAfterCreate}
-                onCheckedChange={(checked) => setStartAfterCreate(checked === true)}
-              />
-              Start container immediately after create
-            </label>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateDialogOpen(false)} disabled={isCreatingContainer}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void handleCreateContainer()}
-              disabled={isCreatingContainer || createImageRef.length === 0}
-            >
-              {isCreatingContainer ? <Spinner className="h-4 w-4 mr-2" /> : null}
-              Create
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ContainerCreateDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        imageOptions={imageOptions}
+        onCreated={fetchContainers}
+      />
     </div>
   );
 }

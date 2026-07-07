@@ -38,6 +38,7 @@ export const authOptions: AuthOptions = {
         });
 
         if (!user) return null;
+        if (!user.emailVerifiedAt) return null;
 
         const isValid = await bcrypt.compare(password, user.password);
 
@@ -60,14 +61,8 @@ export const authOptions: AuthOptions = {
       return token;
     },
     async session({ session, token }: { session: Session; token: JWT }) {
-      if (session.user && token.sub) {
-        const user = await prisma.user.findUnique({
-          where: { id: token.sub },
-          select: { role: true }
-        });
-        if (user?.role) {
-          session.user.role = user.role;
-        }
+      if (session.user && typeof token.role === "string") {
+        session.user.role = token.role;
       }
       return session;
     },

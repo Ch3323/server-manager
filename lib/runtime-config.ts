@@ -11,6 +11,11 @@ export function getWorkspaceRoot() {
     : path.resolve(/* turbopackIgnore: true */ process.cwd());
 }
 
+export function getWorkspaceHostRoot() {
+  const configuredRoot = process.env.FILE_MANAGER_HOST_ROOT?.trim();
+  return configuredRoot ? path.resolve(configuredRoot) : getWorkspaceRoot();
+}
+
 export function getWorkspaceRootLabel() {
   const workspaceRoot = getWorkspaceRoot();
   const normalized = workspaceRoot.replace(/\\/g, "/");

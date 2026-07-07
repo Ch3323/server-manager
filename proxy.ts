@@ -5,6 +5,9 @@ import { buildOptionsResponse, enforceRequestSecurity } from "@/lib/api-security
 const PUBLIC_PATHS = new Set([
   "/auth/login",
   "/auth/register",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+  "/auth/verify-email",
   "/api/register",
 ]);
 

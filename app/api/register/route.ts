@@ -6,12 +6,14 @@ import {
   enforceRequestSecurity,
   jsonResponse,
 } from "@/lib/api-security";
+import { createAuthToken } from "@/lib/auth-tokens";
+import { sendAuthEmail } from "@/lib/auth-email";
 
 const registerSchema = z.object({
   email: z.email().transform((value) => value.trim().toLowerCase()),
   password: z
     .string()
-    .min(12, "Password must be at least 12 characters")
+    .min(8, "Password must be at least 8 characters")
     .max(128, "Password is too long")
     .regex(/[a-z]/, "Password must include a lowercase letter")
     .regex(/[A-Z]/, "Password must include an uppercase letter")
@@ -72,5 +74,13 @@ export async function POST(req: Request) {
     },
   });
 
-  return jsonResponse(req, { success: true }, { status: 201 });
+  const verification = await createAuthToken(email, "EMAIL_VERIFICATION", 24 * 60 * 60 * 1000);
+  await sendAuthEmail({
+    to: email,
+    kind: "verify-email",
+    token: verification.token,
+    expiresAt: verification.expiresAt,
+  });
+
+  return jsonResponse(req, { success: true, requiresEmailVerification: true }, { status: 201 });
 }

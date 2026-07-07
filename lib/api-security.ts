@@ -244,6 +244,13 @@ export function textResponse(request: Request, body: string, init?: ResponseInit
   });
 }
 
+export function streamResponse(request: Request, body: BodyInit, init?: ResponseInit) {
+  return new Response(body, {
+    ...init,
+    headers: withSecurityHeaders(request, init),
+  });
+}
+
 export function buildOptionsResponse(request: Request) {
   const origin = request.headers.get("origin");
   if (origin && !isTrustedOrigin(request, origin)) {

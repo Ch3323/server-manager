@@ -2,6 +2,7 @@ import {
   getWorkspaceRootName,
   listDirectory,
   resolveWorkspacePath,
+  toWorkspaceHostPath,
   toRelativeWorkspacePath,
 } from "@/lib/file-manager";
 import {
@@ -16,7 +17,7 @@ export function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
+  const auth = await requireApiSession(request, { roles: ["ADMIN", "MOD"] });
 
   if (auth instanceof Response) {
     return auth;
@@ -31,6 +32,8 @@ export async function GET(request: Request) {
     return jsonResponse(request, {
       rootName: getWorkspaceRootName(),
       currentPath: normalizedPath,
+      currentAbsolutePath: resolveWorkspacePath(normalizedPath),
+      currentHostPath: toWorkspaceHostPath(normalizedPath),
       entries,
     });
   } catch (err) {
