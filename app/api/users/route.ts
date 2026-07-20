@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { recordActivity } from "@/lib/activity";
+import { normalizeWorkspaceAccessPath } from "@/lib/workspace-access";
 import {
   buildOptionsResponse,
   jsonResponse,
@@ -11,6 +12,8 @@ import {
 } from "@/lib/api-security";
 
 const roleSchema = z.enum(["ADMIN", "MOD", "USER"]);
+const workspaceAccessSchema = z.enum(["VIEW", "EDIT"]);
+const workspacePathSchema = z.string().max(512).default("");
 
 const createUserSchema = z.object({
   email: z.email().transform((value) => value.trim().toLowerCase()),
@@ -22,16 +25,28 @@ const createUserSchema = z.object({
     .regex(/[A-Z]/, "Password must include an uppercase letter")
     .regex(/[0-9]/, "Password must include a number"),
   role: roleSchema.default("USER"),
+  workspacePath: workspacePathSchema.optional(),
+  workspaceAccess: workspaceAccessSchema.default("VIEW"),
 });
 
 const updateUserSchema = z.object({
   userId: z.string().min(1),
   role: roleSchema,
+  workspacePath: workspacePathSchema.optional(),
+  workspaceAccess: workspaceAccessSchema.optional(),
 });
 
 const deleteUserSchema = z.object({
   userId: z.string().min(1),
 });
+
+function parseModeratorWorkspacePath(request: Request, inputPath: string | undefined) {
+  try {
+    return normalizeWorkspaceAccessPath(inputPath ?? "");
+  } catch {
+    return textResponse(request, "Workspace path is outside workspace", { status: 400 });
+  }
+}
 
 export function OPTIONS(request: Request) {
   return buildOptionsResponse(request);
@@ -50,6 +65,8 @@ export async function GET(request: Request) {
         id: true,
         email: true,
         role: true,
+        workspacePath: true,
+        workspaceAccess: true,
         createdAt: true,
       },
       orderBy: [{ role: "asc" }, { email: "asc" }],
@@ -90,6 +107,14 @@ export async function POST(request: Request) {
   }
 
   const { email, password, role } = parsedBody.data;
+  const workspaceAccess = role === "MOD" ? parsedBody.data.workspaceAccess : "VIEW";
+  const workspacePath = role === "MOD"
+    ? parseModeratorWorkspacePath(request, parsedBody.data.workspacePath)
+    : "";
+
+  if (workspacePath instanceof Response) {
+    return workspacePath;
+  }
 
   try {
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -103,12 +128,16 @@ export async function POST(request: Request) {
         email,
         password: hashed,
         role,
+        workspacePath,
+        workspaceAccess,
         emailVerifiedAt: new Date(),
       },
       select: {
         id: true,
         email: true,
         role: true,
+        workspacePath: true,
+        workspaceAccess: true,
         createdAt: true,
       },
     });
@@ -151,7 +180,13 @@ export async function PATCH(request: Request) {
   try {
     const targetUser = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, role: true },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        workspacePath: true,
+        workspaceAccess: true,
+      },
     });
 
     if (!targetUser) {
@@ -166,13 +201,34 @@ export async function PATCH(request: Request) {
       return textResponse(request, "You cannot change your own role", { status: 400 });
     }
 
+    const workspacePath = role === "MOD"
+      ? parseModeratorWorkspacePath(
+        request,
+        parsedBody.data.workspacePath ?? targetUser.workspacePath
+      )
+      : "";
+
+    if (workspacePath instanceof Response) {
+      return workspacePath;
+    }
+
+    const workspaceAccess = role === "MOD"
+      ? parsedBody.data.workspaceAccess ?? targetUser.workspaceAccess
+      : "VIEW";
+
     const updatedUser = await prisma.user.update({
       where: { id: userId },
-      data: { role },
+      data: {
+        role,
+        workspacePath,
+        workspaceAccess,
+      },
       select: {
         id: true,
         email: true,
         role: true,
+        workspacePath: true,
+        workspaceAccess: true,
         createdAt: true,
       },
     });
@@ -180,7 +236,7 @@ export async function PATCH(request: Request) {
     await recordActivity({
       actorEmail: auth.session.user.email,
       actorRole: auth.session.user.role,
-      action: `changed user ${targetUser.email} role from ${targetUser.role} to ${role}`,
+      action: `updated user ${targetUser.email} from ${targetUser.role} to ${role}`,
     });
 
     return jsonResponse(request, updatedUser);

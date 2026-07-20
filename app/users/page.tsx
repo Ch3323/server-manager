@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import axios from "axios";
-import { RefreshCw, Search, Trash2, UserPlus, Users } from "lucide-react";
+import { RefreshCw, Save, Search, Trash2, UserPlus, Users } from "lucide-react";
 
 import { showErrorToast, showSuccessToast } from "@/lib/client-notify";
 import { Badge } from "@/components/ui/badge";
@@ -29,15 +29,24 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 
 type Role = "ADMIN" | "MOD" | "USER";
+type WorkspaceAccess = "VIEW" | "EDIT";
 
 type UserItem = {
   id: string;
   email: string;
   role: Role;
+  workspacePath: string;
+  workspaceAccess: WorkspaceAccess;
   createdAt: string;
 };
 
+type AccessDraft = {
+  workspacePath: string;
+  workspaceAccess: WorkspaceAccess;
+};
+
 const roleOptions: Role[] = ["ADMIN", "MOD", "USER"];
+const workspaceAccessOptions: WorkspaceAccess[] = ["VIEW", "EDIT"];
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString();
@@ -47,6 +56,18 @@ function getRoleBadgeVariant(role: Role) {
   if (role === "ADMIN") return "default";
   if (role === "MOD") return "secondary";
   return "outline";
+}
+
+function buildAccessDrafts(users: UserItem[]) {
+  return Object.fromEntries(
+    users.map((user) => [
+      user.id,
+      {
+        workspacePath: user.workspacePath ?? "",
+        workspaceAccess: user.workspaceAccess ?? "VIEW",
+      },
+    ])
+  ) as Record<string, AccessDraft>;
 }
 
 export default function UsersPage() {
@@ -59,12 +80,16 @@ export default function UsersPage() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<Role | "all">("all");
   const [roleLoadingId, setRoleLoadingId] = useState<string | null>(null);
+  const [accessLoadingId, setAccessLoadingId] = useState<string | null>(null);
+  const [accessDrafts, setAccessDrafts] = useState<Record<string, AccessDraft>>({});
   const [deleteTarget, setDeleteTarget] = useState<UserItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createEmail, setCreateEmail] = useState("");
   const [createPassword, setCreatePassword] = useState("");
   const [createRole, setCreateRole] = useState<Role>("USER");
+  const [createWorkspacePath, setCreateWorkspacePath] = useState("");
+  const [createWorkspaceAccess, setCreateWorkspaceAccess] = useState<WorkspaceAccess>("VIEW");
   const [isCreating, setIsCreating] = useState(false);
 
   const isAdmin = session?.user?.role === "ADMIN";
@@ -75,7 +100,9 @@ export default function UsersPage() {
 
     try {
       const res = await axios.get("/api/users");
-      setUsers(res.data ?? []);
+      const nextUsers = (res.data ?? []) as UserItem[];
+      setUsers(nextUsers);
+      setAccessDrafts(buildAccessDrafts(nextUsers));
     } catch (err) {
       console.error(err);
       showErrorToast(err, "Failed to load users");
@@ -119,7 +146,9 @@ export default function UsersPage() {
       const matchesKeyword =
         keyword.length === 0 ||
         user.email.toLowerCase().includes(keyword) ||
-        user.role.toLowerCase().includes(keyword);
+        user.role.toLowerCase().includes(keyword) ||
+        (user.workspacePath ?? "").toLowerCase().includes(keyword) ||
+        (user.workspaceAccess ?? "").toLowerCase().includes(keyword);
       const matchesRole = roleFilter === "all" || user.role === roleFilter;
       return matchesKeyword && matchesRole;
     });
@@ -134,15 +163,55 @@ export default function UsersPage() {
       const res = await axios.patch("/api/users", {
         userId: user.id,
         role,
+        workspacePath: role === "MOD" ? accessDrafts[user.id]?.workspacePath ?? user.workspacePath ?? "" : "",
+        workspaceAccess: role === "MOD" ? accessDrafts[user.id]?.workspaceAccess ?? user.workspaceAccess ?? "VIEW" : "VIEW",
       });
       const updated = res.data as UserItem;
       setUsers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setAccessDrafts((current) => ({
+        ...current,
+        [updated.id]: {
+          workspacePath: updated.workspacePath ?? "",
+          workspaceAccess: updated.workspaceAccess ?? "VIEW",
+        },
+      }));
       showSuccessToast(`Updated ${user.email} to ${role}`);
     } catch (err) {
       console.error(err);
       showErrorToast(err, "Failed to update user role");
     } finally {
       setRoleLoadingId(null);
+    }
+  }
+
+  async function updateModeratorAccess(user: UserItem) {
+    const draft = accessDrafts[user.id];
+    if (!draft || user.role !== "MOD") return;
+
+    setAccessLoadingId(user.id);
+
+    try {
+      const res = await axios.patch("/api/users", {
+        userId: user.id,
+        role: user.role,
+        workspacePath: draft.workspacePath,
+        workspaceAccess: draft.workspaceAccess,
+      });
+      const updated = res.data as UserItem;
+      setUsers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setAccessDrafts((current) => ({
+        ...current,
+        [updated.id]: {
+          workspacePath: updated.workspacePath ?? "",
+          workspaceAccess: updated.workspaceAccess ?? "VIEW",
+        },
+      }));
+      showSuccessToast(`Updated workspace access for ${user.email}`);
+    } catch (err) {
+      console.error(err);
+      showErrorToast(err, "Failed to update workspace access");
+    } finally {
+      setAccessLoadingId(null);
     }
   }
 
@@ -157,12 +226,24 @@ export default function UsersPage() {
         email,
         password: createPassword,
         role: createRole,
+        workspacePath: createRole === "MOD" ? createWorkspacePath : "",
+        workspaceAccess: createRole === "MOD" ? createWorkspaceAccess : "VIEW",
       });
-      setUsers((current) => [...current, res.data as UserItem].sort((a, b) => a.email.localeCompare(b.email)));
+      const created = res.data as UserItem;
+      setUsers((current) => [...current, created].sort((a, b) => a.email.localeCompare(b.email)));
+      setAccessDrafts((current) => ({
+        ...current,
+        [created.id]: {
+          workspacePath: created.workspacePath ?? "",
+          workspaceAccess: created.workspaceAccess ?? "VIEW",
+        },
+      }));
       setCreateDialogOpen(false);
       setCreateEmail("");
       setCreatePassword("");
       setCreateRole("USER");
+      setCreateWorkspacePath("");
+      setCreateWorkspaceAccess("VIEW");
       showSuccessToast(`Created user ${email}`);
     } catch (err) {
       console.error(err);
@@ -182,6 +263,11 @@ export default function UsersPage() {
         data: { userId: deleteTarget.id },
       });
       setUsers((current) => current.filter((user) => user.id !== deleteTarget.id));
+      setAccessDrafts((current) => {
+        const next = { ...current };
+        delete next[deleteTarget.id];
+        return next;
+      });
       showSuccessToast(`Deleted user ${deleteTarget.email}`);
       setDeleteTarget(null);
     } catch (err) {
@@ -291,9 +377,10 @@ export default function UsersPage() {
 
           <CardContent>
             <div className="overflow-hidden rounded-lg border">
-              <div className="hidden grid-cols-[minmax(0,1fr)_140px_220px_120px] items-center gap-3 bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground md:grid">
+              <div className="hidden grid-cols-[minmax(0,1fr)_110px_minmax(260px,1fr)_180px_170px] items-center gap-3 bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground lg:grid">
                 <span>Email</span>
                 <span>Role</span>
+                <span>Moderator Workspace</span>
                 <span>Created</span>
                 <span className="text-right">Actions</span>
               </div>
@@ -308,11 +395,19 @@ export default function UsersPage() {
                     const isSelf = user.email === currentEmail;
                     const isProtectedAdmin = user.role === "ADMIN";
                     const isRoleLoading = roleLoadingId === user.id;
+                    const isAccessLoading = accessLoadingId === user.id;
+                    const accessDraft = accessDrafts[user.id] ?? {
+                      workspacePath: user.workspacePath ?? "",
+                      workspaceAccess: user.workspaceAccess ?? "VIEW",
+                    };
+                    const hasAccessChanges =
+                      accessDraft.workspacePath.trim() !== (user.workspacePath ?? "") ||
+                      accessDraft.workspaceAccess !== (user.workspaceAccess ?? "VIEW");
 
                     return (
                       <div
                         key={user.id}
-                        className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_140px_220px_120px] md:items-center"
+                        className="grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_110px_minmax(260px,1fr)_180px_170px] lg:items-center"
                       >
                         <div className="min-w-0">
                           <div className="flex min-w-0 items-center gap-2">
@@ -320,7 +415,7 @@ export default function UsersPage() {
                             {isSelf ? <Badge variant="outline">You</Badge> : null}
                             {isProtectedAdmin ? <Badge variant="outline">Protected</Badge> : null}
                           </div>
-                          <div className="mt-1 text-xs text-muted-foreground md:hidden">
+                          <div className="mt-1 text-xs text-muted-foreground lg:hidden">
                             Created: {formatDate(user.createdAt)}
                           </div>
                         </div>
@@ -329,7 +424,64 @@ export default function UsersPage() {
                           <Badge variant={getRoleBadgeVariant(user.role)}>{user.role}</Badge>
                         </div>
 
-                        <div className="hidden text-sm text-muted-foreground md:block">
+                        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px_auto]">
+                          {user.role === "MOD" ? (
+                            <>
+                              <Input
+                                value={accessDraft.workspacePath}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setAccessDrafts((current) => ({
+                                    ...current,
+                                    [user.id]: {
+                                      ...accessDraft,
+                                      workspacePath: value,
+                                    },
+                                  }));
+                                }}
+                                placeholder="workspace subpath"
+                                disabled={isSelf || isAccessLoading}
+                              />
+                              <Select
+                                value={accessDraft.workspaceAccess}
+                                onValueChange={(value) => {
+                                  setAccessDrafts((current) => ({
+                                    ...current,
+                                    [user.id]: {
+                                      ...accessDraft,
+                                      workspaceAccess: value as WorkspaceAccess,
+                                    },
+                                  }));
+                                }}
+                                disabled={isSelf || isAccessLoading}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {workspaceAccessOptions.map((access) => (
+                                    <SelectItem key={access} value={access}>
+                                      {access === "VIEW" ? "View only" : "Edit"}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                onClick={() => void updateModeratorAccess(user)}
+                                disabled={isSelf || isAccessLoading || !hasAccessChanges}
+                              >
+                                {isAccessLoading ? <Spinner className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                                <span className="sr-only">Save workspace access</span>
+                              </Button>
+                            </>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">Not applicable</span>
+                          )}
+                        </div>
+
+                        <div className="hidden text-sm text-muted-foreground lg:block">
                           {formatDate(user.createdAt)}
                         </div>
 
@@ -404,6 +556,27 @@ export default function UsersPage() {
                 ))}
               </SelectContent>
             </Select>
+            {createRole === "MOD" ? (
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
+                <Input
+                  value={createWorkspacePath}
+                  onChange={(event) => setCreateWorkspacePath(event.target.value)}
+                  placeholder="workspace subpath"
+                />
+                <Select
+                  value={createWorkspaceAccess}
+                  onValueChange={(value) => setCreateWorkspaceAccess(value as WorkspaceAccess)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="VIEW">View only</SelectItem>
+                    <SelectItem value="EDIT">Edit</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>

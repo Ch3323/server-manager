@@ -60,6 +60,7 @@ import { Spinner } from "@/components/ui/spinner";
 
 type FileType = "file" | "directory";
 type FilterMode = "all" | "directory" | "file";
+type WorkspaceAccessMode = "VIEW" | "EDIT";
 
 interface FileEntry {
     name: string;
@@ -270,8 +271,10 @@ export default function FilesPage() {
     const { data: session, status } = useSession();
     const role = session?.user.role;
     const canAccessFiles = role === "ADMIN" || role === "MOD";
-    const canManageFiles = role === "ADMIN";
-    const isFileManagerReadOnly = role === "MOD";
+    const [workspaceAccessMode, setWorkspaceAccessMode] = useState<WorkspaceAccessMode>("VIEW");
+    const [workspaceCanWrite, setWorkspaceCanWrite] = useState(role === "ADMIN");
+    const canManageFiles = role === "ADMIN" || workspaceCanWrite;
+    const isFileManagerReadOnly = canAccessFiles && !canManageFiles;
 
     const [rootName, setRootName] = useState("workspace");
     const [currentPath, setCurrentPath] = useState("");
@@ -438,6 +441,8 @@ export default function FilesPage() {
             const nextCurrentPath = (res.data.currentPath ?? "") as string;
 
             setRootName(res.data.rootName ?? "workspace");
+            setWorkspaceAccessMode(res.data.accessMode === "EDIT" ? "EDIT" : "VIEW");
+            setWorkspaceCanWrite(res.data.canWrite === true);
             setCurrentPath(nextCurrentPath);
             setEntries(nextEntries);
             setHasLoadedOnce(true);
@@ -1317,6 +1322,8 @@ export default function FilesPage() {
                                 </Badge>
                                 {isFileManagerReadOnly ? (
                                     <Badge variant="secondary">View only</Badge>
+                                ) : workspaceAccessMode === "EDIT" ? (
+                                    <Badge variant="secondary">Edit</Badge>
                                 ) : null}
                                 <Button
                                     variant="outline"

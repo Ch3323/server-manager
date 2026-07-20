@@ -1,9 +1,6 @@
 import {
-  getWorkspaceRootName,
   listDirectory,
   resolveWorkspacePath,
-  toWorkspaceHostPath,
-  toRelativeWorkspacePath,
 } from "@/lib/file-manager";
 import {
   buildOptionsResponse,
@@ -11,6 +8,13 @@ import {
   requireApiSession,
   textResponse,
 } from "@/lib/api-security";
+import {
+  getFileWorkspaceAccess,
+  getScopedWorkspaceRootName,
+  resolveScopedWorkspacePath,
+  toScopedWorkspaceHostPath,
+  toVirtualFileListEntries,
+} from "@/lib/workspace-access";
 
 export function OPTIONS(request: Request) {
   return buildOptionsResponse(request);
@@ -24,17 +28,24 @@ export async function GET(request: Request) {
   }
 
   try {
+    const workspaceAccess = await getFileWorkspaceAccess(auth.session);
+    if (!workspaceAccess) {
+      return textResponse(request, "Forbidden", { status: 403 });
+    }
+
     const url = new URL(request.url);
     const targetPath = url.searchParams.get("path") ?? "";
-    const normalizedPath = toRelativeWorkspacePath(resolveWorkspacePath(targetPath));
-    const entries = await listDirectory(normalizedPath);
+    const scopedPath = resolveScopedWorkspacePath(workspaceAccess, targetPath);
+    const entries = await listDirectory(scopedPath.actualPath);
 
     return jsonResponse(request, {
-      rootName: getWorkspaceRootName(),
-      currentPath: normalizedPath,
-      currentAbsolutePath: resolveWorkspacePath(normalizedPath),
-      currentHostPath: toWorkspaceHostPath(normalizedPath),
-      entries,
+      rootName: getScopedWorkspaceRootName(workspaceAccess),
+      accessMode: workspaceAccess.accessMode,
+      canWrite: workspaceAccess.canWrite,
+      currentPath: scopedPath.virtualPath,
+      currentAbsolutePath: resolveWorkspacePath(scopedPath.actualPath),
+      currentHostPath: toScopedWorkspaceHostPath(workspaceAccess, scopedPath.virtualPath),
+      entries: toVirtualFileListEntries(workspaceAccess, entries),
     });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;

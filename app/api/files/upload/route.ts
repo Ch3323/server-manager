@@ -4,6 +4,7 @@ import {
   appendChunkToUploadSession,
   createChunkUploadSession,
   finalizeChunkUploadSession,
+  getChunkUploadSessionTargetPath,
   writeBinaryFile,
 } from "@/lib/file-manager";
 import {
@@ -12,6 +13,13 @@ import {
   requireApiSession,
   textResponse,
 } from "@/lib/api-security";
+import {
+  assertActualWorkspacePathInScope,
+  getFileWorkspaceAccess,
+  resolveScopedWorkspacePath,
+  toVirtualWorkspacePath,
+} from "@/lib/workspace-access";
+import type { FileWorkspaceAccess } from "@/lib/workspace-access";
 
 function joinPath(base: string, name: string) {
   if (!base) return name;
@@ -47,17 +55,43 @@ function resolveChunkSize(requestedChunkSize: unknown) {
 }
 
 async function requireUploadAccess(request: Request, limitKey: string, limit: number) {
-  return requireApiSession(request, {
-    roles: ["ADMIN"],
+  const auth = await requireApiSession(request, {
+    roles: ["ADMIN", "MOD"],
     rateLimit: {
       key: limitKey,
       limit,
       windowMs: 60_000,
     },
   });
+
+  if (auth instanceof Response) {
+    return auth;
+  }
+
+  const workspaceAccess = await getFileWorkspaceAccess(auth.session);
+  if (!workspaceAccess) {
+    return textResponse(request, "Forbidden", { status: 403 });
+  }
+
+  if (!workspaceAccess.canWrite) {
+    return textResponse(request, "Access denied for this path", { status: 403 });
+  }
+
+  return { ...auth, workspaceAccess };
 }
 
-async function handleLegacyFormUpload(request: Request) {
+async function assertUploadSessionInScope(
+  uploadId: string,
+  workspaceAccess: FileWorkspaceAccess
+) {
+  const targetPath = await getChunkUploadSessionTargetPath(uploadId);
+  assertActualWorkspacePathInScope(workspaceAccess, targetPath);
+}
+
+async function handleLegacyFormUpload(
+  request: Request,
+  workspaceAccess: FileWorkspaceAccess
+) {
   const formData = await request.formData();
   const file = formData.get("file");
   const directoryPath = typeof formData.get("directoryPath") === "string"
@@ -76,12 +110,13 @@ async function handleLegacyFormUpload(request: Request) {
     ? sanitizeRelativePath(relativePath)
     : sanitizeRelativePath(path.posix.basename(file.name.replace(/\\/g, "/")));
   const targetPath = joinPath(directoryPath, targetRelativePath);
+  const scopedTargetPath = resolveScopedWorkspacePath(workspaceAccess, targetPath);
   const binaryContent = new Uint8Array(await file.arrayBuffer());
 
-  await writeBinaryFile(targetPath, binaryContent, { overwrite });
+  await writeBinaryFile(scopedTargetPath.actualPath, binaryContent, { overwrite });
   return jsonResponse(request, {
     success: true,
-    path: targetPath,
+    path: scopedTargetPath.virtualPath,
     name: path.posix.basename(targetRelativePath),
     size: file.size,
   });
@@ -98,7 +133,7 @@ export async function POST(request: Request) {
     const contentType = request.headers.get("content-type") ?? "";
 
     if (contentType.includes("multipart/form-data")) {
-      return await handleLegacyFormUpload(request);
+      return await handleLegacyFormUpload(request, auth.workspaceAccess);
     }
 
     const body = await request.json();
@@ -116,14 +151,15 @@ export async function POST(request: Request) {
         ? sanitizeRelativePath(relativePath)
         : sanitizeRelativePath(path.posix.basename(fileName.replace(/\\/g, "/")));
       const targetPath = joinPath(directoryPath, targetRelativePath);
-      const session = await createChunkUploadSession(targetPath, { overwrite, size, chunkSize });
+      const scopedTargetPath = resolveScopedWorkspacePath(auth.workspaceAccess, targetPath);
+      const session = await createChunkUploadSession(scopedTargetPath.actualPath, { overwrite, size, chunkSize });
 
       return jsonResponse(request, {
         success: true,
         uploadId: session.id,
         chunkSize,
         totalChunks: session.totalChunks,
-        path: targetPath,
+        path: scopedTargetPath.virtualPath,
       });
     }
 
@@ -133,10 +169,12 @@ export async function POST(request: Request) {
         return textResponse(request, "uploadId required", { status: 400 });
       }
 
+      await assertUploadSessionInScope(uploadId, auth.workspaceAccess);
       const uploadedFile = await finalizeChunkUploadSession(uploadId);
       return jsonResponse(request, {
         success: true,
         ...uploadedFile,
+        path: toVirtualWorkspacePath(auth.workspaceAccess, uploadedFile.path),
       });
     }
 
@@ -146,6 +184,7 @@ export async function POST(request: Request) {
         return textResponse(request, "uploadId required", { status: 400 });
       }
 
+      await assertUploadSessionInScope(uploadId, auth.workspaceAccess);
       await abortChunkUploadSession(uploadId);
       return jsonResponse(request, { success: true });
     }
@@ -190,6 +229,7 @@ export async function PUT(request: Request) {
     }
 
     const chunk = new Uint8Array(await request.arrayBuffer());
+    await assertUploadSessionInScope(uploadId, auth.workspaceAccess);
     const session = await appendChunkToUploadSession(uploadId, chunk, offset);
     return jsonResponse(request, {
       success: true,

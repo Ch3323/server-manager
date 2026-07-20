@@ -339,6 +339,11 @@ export async function appendChunkToUploadSession(
   });
 }
 
+export async function getChunkUploadSessionTargetPath(uploadId: string) {
+  const record = await readUploadSession(uploadId);
+  return toRelativeWorkspacePath(record.targetPath);
+}
+
 export async function finalizeChunkUploadSession(uploadId: string) {
   return withUploadSessionLock(uploadId, async () => {
     const record = await readUploadSession(uploadId);

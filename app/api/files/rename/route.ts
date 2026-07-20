@@ -5,19 +5,30 @@ import {
   requireApiSession,
   textResponse,
 } from "@/lib/api-security";
+import {
+  getFileWorkspaceAccess,
+  requireWorkspaceWriteAccess,
+  resolveScopedWorkspacePath,
+} from "@/lib/workspace-access";
 
 export function OPTIONS(request: Request) {
   return buildOptionsResponse(request);
 }
 
 export async function POST(request: Request) {
-  const auth = await requireApiSession(request, { roles: ["ADMIN"] });
+  const auth = await requireApiSession(request, { roles: ["ADMIN", "MOD"] });
 
   if (auth instanceof Response) {
     return auth;
   }
 
   try {
+    const workspaceAccess = await getFileWorkspaceAccess(auth.session);
+    if (!workspaceAccess) {
+      return textResponse(request, "Forbidden", { status: 403 });
+    }
+    requireWorkspaceWriteAccess(workspaceAccess);
+
     const body = await request.json();
     const fromPath = typeof body?.fromPath === "string" ? body.fromPath : "";
     const toPath = typeof body?.toPath === "string" ? body.toPath : "";
@@ -26,7 +37,9 @@ export async function POST(request: Request) {
       return textResponse(request, "fromPath and toPath required", { status: 400 });
     }
 
-    await renamePath(fromPath, toPath);
+    const scopedFromPath = resolveScopedWorkspacePath(workspaceAccess, fromPath);
+    const scopedToPath = resolveScopedWorkspacePath(workspaceAccess, toPath);
+    await renamePath(scopedFromPath.actualPath, scopedToPath.actualPath);
     return jsonResponse(request, { success: true });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
